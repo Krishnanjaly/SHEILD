@@ -111,6 +111,13 @@ export default function Settings() {
                             maximumTrackTintColor="#444"
                         />
                     </View>
+                    <TouchableOpacity
+                        style={styles.keywordOption}
+                        onPress={() => router.push("/hardware-trigger")}
+                    >
+                        <MaterialIcons name="devices" size={22} color="#EC1313" />
+                        <Text style={styles.keywordText}>Hardware Trigger Settings</Text>
+                    </TouchableOpacity>
                 </Section>
 
                 {/* AUDIO SETTINGS */}

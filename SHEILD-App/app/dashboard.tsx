@@ -195,13 +195,14 @@ export default function Dashboard() {
         <View style={styles.featureGrid}>
 
           <FeatureButton icon="group" label="Emergency Contacts" route="/contacts" />
+          <FeatureButton icon="person" label="Profile" route="/profile" />
           <FeatureButton icon="timer" label="Safety Timer" route="/safetimer" />
           <FeatureButton icon="location-on" label="Share Location" route="/safemap" />
           <FeatureButton icon="phone-in-talk" label="Fake Call" route="/fake-call" />
           <FeatureButton icon="call" label="Helpline Numbers" route="/helpline" />
           <FeatureButton icon="verified-user" label="Trusted Circles" route="/circles" />
           <FeatureButton icon="report" label="About" route="/report" />
-          <FeatureButton icon="smart-toy" label="AI Guardian" route="/ai" />
+          <FeatureButton icon="smart-toy" label="AI Guardian" route="/guardian" />
 
         </View>
 

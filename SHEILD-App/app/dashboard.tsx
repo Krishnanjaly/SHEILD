@@ -12,8 +12,9 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useEffect, useState } from "react";
 import BASE_URL from "../config/api";
 import * as Location from "expo-location";
-import * as SMS from "expo-sms";
-import { Linking } from "react-native";
+import { Linking, Platform, PermissionsAndroid } from "react-native";
+import haversine from 'haversine';
+import call from 'react-native-phone-call';
 
 export default function Dashboard() {
   const router = useRouter();
@@ -51,27 +52,77 @@ export default function Dashboard() {
       const mapLink = `https://www.google.com/maps?q=${lat},${lon}`;
 
       // 3️⃣ Fetch trusted contacts from backend
-      const contactResponse = await fetch(`${BASE_URL}/getTrustedContacts/U101`);
-      const contacts = await contactResponse.json();
+      const contactResponse = await fetch(`${BASE_URL}/contacts/${email}`);
 
-      const numbers = contacts.map((c: any) => c.trusted_no);
-
-      const message =
-        `🚨 EMERGENCY ALERT 🚨\n\nI need help.\nMy live location:\n${mapLink}`;
-
-      // 4️⃣ Send SMS alert
-      const smsAvailable = await SMS.isAvailableAsync();
-
-      if (smsAvailable && numbers.length > 0) {
-        await SMS.sendSMSAsync(numbers, message);
+      if (!contactResponse.ok) {
+        throw new Error(`Failed to fetch contacts: HTTP ${contactResponse.status}`);
       }
 
-      // 5️⃣ Call first trusted contact
-      if (numbers.length > 0) {
-        Linking.openURL(`tel:${numbers[0]}`);
+      const data = await contactResponse.json();
+      const contacts = Array.isArray(data) ? data : (Array.isArray(data.contacts) ? data.contacts : []);
+
+      // (NEW) 3B -> Find closest contact based on latitude and longitude
+      if (contacts.length > 0) {
+        let closestContact = contacts[0];
+        let minDistance = Infinity;
+
+        contacts.forEach((c: any) => {
+          if (c.latitude && c.longitude) {
+            const distance = haversine(
+              { latitude: lat, longitude: lon },
+              { latitude: parseFloat(c.latitude), longitude: parseFloat(c.longitude) }
+            );
+
+            if (distance < minDistance) {
+              minDistance = distance;
+              closestContact = c;
+            }
+          }
+        });
+
+        if (closestContact?.phone) {
+          console.log("Calling closest contact: ", closestContact.phone);
+
+          if (Platform.OS === 'android') {
+            try {
+              const granted = await PermissionsAndroid.request(
+                PermissionsAndroid.PERMISSIONS.CALL_PHONE,
+                {
+                  title: 'Emergency Call Permission',
+                  message: 'SHIELD needs access to make automatic emergency calls.',
+                  buttonNeutral: 'Ask Me Later',
+                  buttonNegative: 'Cancel',
+                  buttonPositive: 'OK',
+                }
+              );
+
+              if (granted === PermissionsAndroid.RESULTS.GRANTED) {
+                console.log('CALL_PHONE permission granted. Dialing bypassing overlay...');
+                const args = {
+                  number: closestContact.phone,
+                  prompt: false, // Bypass the prompt to dial directly
+                };
+                call(args).catch(() => { Linking.openURL(`tel:${closestContact.phone}`); });
+              } else {
+                console.log('CALL_PHONE permission denied. Falling back to dialer.');
+                Linking.openURL(`tel:${closestContact.phone}`);
+              }
+            } catch (err) {
+              console.warn(err);
+              Linking.openURL(`tel:${closestContact.phone}`);
+            }
+          } else {
+            // For iOS or other platforms, we might fallback to prompt dialer, or handle appropriately
+            const args = {
+              number: closestContact.phone,
+              prompt: false, // react-native-phone-call has custom iOS implementation, but usually iOS forces a prompt
+            };
+            call(args).catch(() => { Linking.openURL(`tel:${closestContact.phone}`); });
+          }
+        }
       }
 
-      // 6️⃣ Send alert to backend (email notification)
+      // 4️⃣ Send alert to backend (automatic email notification to trusted contacts)
       await fetch(`${BASE_URL}/send-sos`, {
         method: "POST",
         headers: {

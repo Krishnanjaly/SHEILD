@@ -384,7 +384,7 @@ app.listen(PORT, () => {
 
 
 app.post("/send-sos", async (req, res) => {
-  const { email } = req.body;
+  const { email, latitude, longitude } = req.body;
 
   try {
     // 1️⃣ Get user info
@@ -429,11 +429,12 @@ app.post("/send-sos", async (req, res) => {
     });
 
     // 5️⃣ Send single email to all contacts
+    const mapLink = latitude && longitude ? `\n\nLive Location:\nhttps://www.google.com/maps?q=${latitude},${longitude}` : "";
     await transporter.sendMail({
       from: "krishnanjalys98@gmail.com",
       to: recipients, // array of emails
       subject: "🚨 EMERGENCY ALERT - SHIELD",
-      text: `${userName} has triggered an SOS emergency alert!\n\nPlease contact them immediately.`,
+      text: `${userName} has triggered an SOS emergency alert!${mapLink}\n\nPlease contact them immediately.`,
     });
 
     res.json({ message: "SOS emails sent successfully" });
@@ -604,24 +605,33 @@ Please help immediately.
 
 app.post("/addTrustedContact", (req, res) => {
 
-  const { user_id, trusted_name, trusted_no, relationship_type } = req.body;
+  const {
+    user_id,
+    trusted_name,
+    trusted_no,
+    relationship_type,
+    latitude,
+    longitude
+  } = req.body;
 
-  const sql =
-    "INSERT INTO Trusted_Contact (user_id, trusted_name, trusted_no, relationship_type) VALUES (?, ?, ?, ?)";
+  const sql = `
+    INSERT INTO Trusted_Contact
+    (user_id, trusted_name, trusted_no, relationship_type, latitude, longitude)
+    VALUES (?, ?, ?, ?, ?, ?)
+    `;
 
-  db.query(
-    sql,
-    [user_id, trusted_name, trusted_no, relationship_type],
+  db.query(sql,
+    [user_id, trusted_name, trusted_no, relationship_type, latitude, longitude],
     (err, result) => {
 
       if (err) {
         console.log(err);
-        return res.json({ success: false });
+        res.json({ success: false });
+      } else {
+        res.json({ success: true });
       }
 
-      res.json({ success: true });
-    }
-  );
+    });
 });
 
 app.get("/getTrustedContacts/:user_id", (req, res) => {

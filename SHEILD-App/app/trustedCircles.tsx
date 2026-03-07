@@ -10,6 +10,7 @@ import {
 import { useState, useEffect } from "react";
 import { MaterialIcons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
+import * as Location from "expo-location";
 import BASE_URL from "../config/api";
 
 
@@ -33,35 +34,63 @@ export default function TrustedCircles() {
             return;
         }
 
-        const response = await fetch(`${BASE_URL}/addTrustedContact`, {
-            method: "POST",
-            headers: {
-                "Content-Type": "application/json"
-            },
-            body: JSON.stringify({
-                user_id: "U101",
-                trusted_name: name,
-                trusted_no: phone,
-                relationship_type: relationship
-            })
-        });
+        try {
 
-        const data = await response.json();
+            // 📍 Ask location permission
+            const { status } = await Location.requestForegroundPermissionsAsync();
 
-        if (data.success) {
+            if (status !== "granted") {
+                alert("Location permission required");
+                return;
+            }
 
-            alert("Contact Added Successfully");
+            // 📍 Get current location
+            const location = await Location.getCurrentPositionAsync({});
 
-            setName("");
-            setPhone("");
-            setRelationship("");
+            const latitude = location.coords.latitude;
+            const longitude = location.coords.longitude;
 
-            loadContacts();
+            // 🔗 Send to backend
+            const response = await fetch(`${BASE_URL}/addTrustedContact`, {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json"
+                },
+                body: JSON.stringify({
+                    user_id: "U101",
+                    trusted_name: name,
+                    trusted_no: phone,
+                    relationship_type: relationship,
+                    latitude: latitude,
+                    longitude: longitude
+                })
+            });
 
-        } else {
-            alert("Failed to add contact");
+            const data = await response.json();
+
+            if (data.success) {
+
+                alert("Contact Added Successfully");
+
+                setName("");
+                setPhone("");
+                setRelationship("");
+
+                loadContacts();
+
+            } else {
+                alert("Failed to add contact");
+            }
+
+        } catch (error) {
+
+            console.log(error);
+            alert("Error adding contact");
+
         }
+
     };
+
     const loadContacts = async () => {
 
         const response = await fetch(

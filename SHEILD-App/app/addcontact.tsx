@@ -61,16 +61,12 @@ export default function AddContact() {
       const email = await AsyncStorage.getItem("userEmail");
 
       let url = `${BASE_URL}/add-contact`;
-      let method = contactId !== null ? "PUT" : "POST";
+      let method = "POST";
 
       if (contactId !== null) {
         // UPDATE
-        fetch(`${BASE_URL}/add-contact`);
+        url = `${BASE_URL}/update-contact/${contactId}`;
         method = "PUT";
-      } else {
-        // ADD NEW
-        fetch(`${BASE_URL}/add-contact`);
-        method = "POST";
       }
 
       const response = await fetch(url, {

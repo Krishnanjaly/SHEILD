@@ -41,10 +41,10 @@ export default function EmergencyMonitor() {
         // 1. Get User
         const id = await AsyncStorage.getItem("userId");
         setUserId(id);
-        if (!id) return;
-
-        // 2. Fetch Keywords
-        await fetchKeywords(id);
+        if (id) {
+            // 2. Fetch Keywords
+            await fetchKeywords(id);
+        }
 
         // 3. Setup Voice
         Voice.onSpeechResults = onSpeechResults;
@@ -71,12 +71,13 @@ export default function EmergencyMonitor() {
             const now = Date.now();
             volumeHistory.current.push(now);
 
-            // Keep only last 2 seconds of events
-            volumeHistory.current = volumeHistory.current.filter(t => now - t < 2000);
+            // Keep only last 3 seconds of events
+            volumeHistory.current = volumeHistory.current.filter(t => now - t < 3000);
 
-            // If we receive 5+ volume change events within 2 seconds, consider it a long press trigger
-            if (volumeHistory.current.length >= 5 && !listeningRef.current) {
+            // If we receive 3+ volume change events within 3 seconds, consider it a long press trigger
+            if (volumeHistory.current.length >= 3 && !listeningRef.current) {
                 volumeHistory.current = []; // reset
+                Alert.alert("Debug", "Volume sequence detected! Starting SHIELD...");
                 activateEmergencyListening();
             }
         });
@@ -110,12 +111,21 @@ export default function EmergencyMonitor() {
     const activateEmergencyListening = async () => {
         console.log("🔥 EMERGENCY LISTENING ACTIVATED");
         try {
+            if (!userId) {
+                const id = await AsyncStorage.getItem("userId");
+                if (id) {
+                    setUserId(id);
+                    await fetchKeywords(id);
+                }
+            }
+
             listeningRef.current = true;
             setIsListening(true);
             DeviceEventEmitter.emit("EMERGENCY_LISTENING_START");
             await Voice.start('en-US');
-        } catch (e) {
-            console.error(e);
+        } catch (e: any) {
+            console.error("Voice Error: ", e);
+            Alert.alert("Microphone Error", "Failed to start listening: " + (e.message || "Unknown error"));
             listeningRef.current = false;
             setIsListening(false);
             DeviceEventEmitter.emit("EMERGENCY_LISTENING_STOP");

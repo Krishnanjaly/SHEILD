@@ -239,7 +239,7 @@ export default function Dashboard() {
             fontWeight: "bold",
           }}
         >
-          SHIELD
+          SHEILD
         </Text>
 
         <View style={{ position: "relative" }}>

@@ -17,7 +17,8 @@ export default function CloudStorage() {
 
             {/* HEADER */}
             <View style={styles.header}>
-                <View style={{ flexDirection: "row", alignItems: "center", gap: 12 }}>
+
+                <View style={styles.headerLeft}>
                     <View style={styles.headerIcon}>
                         <MaterialIcons name="cloud" size={28} color="#ec1313" />
                     </View>
@@ -31,12 +32,15 @@ export default function CloudStorage() {
                 </View>
 
                 <MaterialIcons name="more-vert" size={24} color="#aaa" />
+
             </View>
 
-            <ScrollView>
+
+            <ScrollView contentContainerStyle={{ paddingBottom: 120 }}>
 
                 {/* STORAGE STATUS */}
                 <View style={styles.statusCard}>
+
                     <View style={styles.statusIcon}>
                         <MaterialIcons name="cloud-done" size={24} color="#ec1313" />
                     </View>
@@ -50,20 +54,29 @@ export default function CloudStorage() {
                             Audio and video evidence stored safely
                         </Text>
                     </View>
+
                 </View>
+
 
                 {/* FILTER BUTTONS */}
                 <View style={styles.filterRow}>
+
                     <TouchableOpacity style={styles.activeFilter}>
-                        <Text style={styles.activeFilterText}>Audio Recordings</Text>
+                        <Text style={styles.activeFilterText}>
+                            Audio Recordings
+                        </Text>
                     </TouchableOpacity>
 
                     <TouchableOpacity style={styles.filter}>
-                        <Text style={styles.filterText}>Video Recordings</Text>
+                        <Text style={styles.filterText}>
+                            Video Recordings
+                        </Text>
                     </TouchableOpacity>
+
                 </View>
 
-                {/* RECORDING LIST */}
+
+                {/* RECORDINGS */}
 
                 <RecordingCard
                     icon="mic"
@@ -88,25 +101,34 @@ export default function CloudStorage() {
 
             </ScrollView>
 
-            {/* BOTTOM NAVIGATION */}
+
+            {/* BOTTOM NAVBAR */}
 
             <View style={styles.navBar}>
 
-                <NavItem icon="home" label="Home"
-                    onPress={() => router.push("/dashboard")}
+                <NavItem
+                    icon="home"
+                    label="Home"
+                    onPress={() => router.replace("/dashboard")}
                 />
 
-                <NavItem icon="group" label="Contacts"
+                <NavItem
+                    icon="group"
+                    label="Contacts"
                     onPress={() => router.push("/contacts")}
                 />
 
                 <NavItem icon="cloud" label="Storage" active />
 
-                <NavItem icon="map" label="SafeMap"
+                <NavItem
+                    icon="map"
+                    label="SafeMap"
                     onPress={() => router.push("/safemap")}
                 />
 
-                <NavItem icon="settings" label="Settings"
+                <NavItem
+                    icon="settings"
+                    label="Settings"
                     onPress={() => router.push("/settings")}
                 />
 
@@ -116,7 +138,20 @@ export default function CloudStorage() {
     );
 }
 
-function RecordingCard({ icon, title, date, duration }) {
+
+/* RECORDING CARD */
+
+interface RecordingCardProps {
+    icon: React.ComponentProps<typeof MaterialIcons>["name"];
+    title: string;
+    date: string;
+    duration: string;
+    active?: boolean;
+    onPress?: () => void;
+}
+
+function RecordingCard({ icon, title, date, duration, active = false, onPress = () => { } }: RecordingCardProps) {
+
 
     return (
         <View style={styles.recordingCard}>
@@ -137,6 +172,7 @@ function RecordingCard({ icon, title, date, duration }) {
 
             </View>
 
+
             <View style={styles.actionRow}>
 
                 <TouchableOpacity style={styles.actionBtn}>
@@ -154,35 +190,52 @@ function RecordingCard({ icon, title, date, duration }) {
             </View>
 
         </View>
-    )
+    );
 }
 
-function NavItem({ icon, label, active, onPress }) {
+
+/* NAV ITEM */
+
+interface NavItemProps {
+    icon: React.ComponentProps<typeof MaterialIcons>["name"];
+    label: string;
+    active?: boolean;
+    onPress?: () => void;
+}
+
+function NavItem({ icon, label, active, onPress }: NavItemProps) {
 
     return (
         <TouchableOpacity style={styles.navItem} onPress={onPress}>
+
             <MaterialIcons
                 name={icon}
                 size={24}
                 color={active ? "#ec1313" : "#777"}
             />
 
-            <Text style={[
-                styles.navLabel,
-                { color: active ? "#ec1313" : "#777" }
-            ]}>
+            <Text
+                style={[
+                    styles.navLabel,
+                    { color: active ? "#ec1313" : "#777" },
+                ]}
+            >
                 {label}
             </Text>
+
         </TouchableOpacity>
-    )
+    );
 }
+
+
+/* STYLES */
 
 const styles = StyleSheet.create({
 
     container: {
         flex: 1,
         backgroundColor: "#181111",
-        paddingTop: 40
+        paddingTop: 40,
     },
 
     header: {
@@ -190,56 +243,63 @@ const styles = StyleSheet.create({
         justifyContent: "space-between",
         alignItems: "center",
         paddingHorizontal: 20,
-        marginBottom: 20
+        marginBottom: 20,
+    },
+
+    headerLeft: {
+        flexDirection: "row",
+        alignItems: "center",
     },
 
     headerIcon: {
         backgroundColor: "rgba(236,19,19,0.1)",
         padding: 10,
-        borderRadius: 15
+        borderRadius: 15,
+        marginRight: 12,
     },
 
     headerTitle: {
         color: "#fff",
         fontSize: 20,
-        fontWeight: "bold"
+        fontWeight: "bold",
     },
 
     headerSub: {
         color: "#aaa",
-        fontSize: 12
+        fontSize: 12,
     },
 
     statusCard: {
         backgroundColor: "#2a1b1b",
-        margin: 20,
+        marginHorizontal: 20,
+        marginBottom: 20,
         padding: 15,
         borderRadius: 20,
         flexDirection: "row",
-        gap: 10
+        alignItems: "center",
     },
 
     statusIcon: {
         backgroundColor: "rgba(236,19,19,0.2)",
         padding: 8,
-        borderRadius: 10
+        borderRadius: 10,
+        marginRight: 10,
     },
 
     statusTitle: {
         color: "#fff",
-        fontWeight: "bold"
+        fontWeight: "bold",
     },
 
     statusSub: {
         color: "#aaa",
-        fontSize: 12
+        fontSize: 12,
     },
 
     filterRow: {
         flexDirection: "row",
         paddingHorizontal: 20,
-        gap: 10,
-        marginBottom: 10
+        marginBottom: 15,
     },
 
     activeFilter: {
@@ -247,7 +307,8 @@ const styles = StyleSheet.create({
         backgroundColor: "#ec1313",
         padding: 12,
         borderRadius: 15,
-        alignItems: "center"
+        alignItems: "center",
+        marginRight: 10,
     },
 
     filter: {
@@ -255,61 +316,61 @@ const styles = StyleSheet.create({
         backgroundColor: "#2a1b1b",
         padding: 12,
         borderRadius: 15,
-        alignItems: "center"
+        alignItems: "center",
     },
 
     activeFilterText: {
         color: "#fff",
-        fontWeight: "bold"
+        fontWeight: "bold",
     },
 
     filterText: {
         color: "#aaa",
-        fontWeight: "bold"
+        fontWeight: "bold",
     },
 
     recordingCard: {
         backgroundColor: "#2a1b1b",
         marginHorizontal: 20,
-        marginVertical: 8,
+        marginBottom: 10,
         padding: 15,
         borderRadius: 20,
         flexDirection: "row",
         justifyContent: "space-between",
-        alignItems: "center"
+        alignItems: "center",
     },
 
     recordingLeft: {
         flexDirection: "row",
         alignItems: "center",
-        gap: 10
     },
 
     recordIcon: {
         backgroundColor: "#1f1f1f",
         padding: 8,
-        borderRadius: 10
+        borderRadius: 10,
+        marginRight: 10,
     },
 
     recordTitle: {
         color: "#fff",
-        fontWeight: "bold"
+        fontWeight: "bold",
     },
 
     recordMeta: {
         color: "#888",
-        fontSize: 11
+        fontSize: 11,
     },
 
     actionRow: {
         flexDirection: "row",
-        gap: 8
     },
 
     actionBtn: {
         backgroundColor: "#1f1f1f",
         padding: 8,
-        borderRadius: 20
+        borderRadius: 20,
+        marginLeft: 6,
     },
 
     navBar: {
@@ -322,15 +383,16 @@ const styles = StyleSheet.create({
         borderTopColor: "rgba(255,255,255,0.1)",
         flexDirection: "row",
         justifyContent: "space-around",
-        alignItems: "center"
+        alignItems: "center",
     },
 
     navItem: {
-        alignItems: "center"
+        alignItems: "center",
     },
 
     navLabel: {
-        fontSize: 10
-    }
+        fontSize: 10,
+        marginTop: 2,
+    },
 
 });

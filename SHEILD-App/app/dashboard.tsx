@@ -343,6 +343,7 @@ export default function Dashboard() {
           <FeatureButton icon="location-on" label="Share Location" route="/safemap" />
           <FeatureButton icon="phone-in-talk" label="Fake Call" route="/fake-call" />
           <FeatureButton icon="call" label="Helpline Numbers" route="/helpline" />
+          <FeatureButton icon="storage" label="Cloud Storage" route="/cloud-storage" />
           <FeatureButton icon="verified-user" label="Trusted Circles" route="/trustedCircles" />
           <FeatureButton icon="report" label="About" route="/report" />
           <FeatureButton icon="smart-toy" label="AI Guardian" route="/guardian" />

@@ -1,12 +1,10 @@
 import React, { useEffect, useState, useRef } from 'react';
-import { View, Alert, DeviceEventEmitter, Platform, PermissionsAndroid, Linking, Modal, Text, TouchableOpacity, StyleSheet } from 'react-native';
+import { View, Alert, DeviceEventEmitter, Platform, PermissionsAndroid, Modal, Text, TouchableOpacity, StyleSheet } from 'react-native';
 import { VolumeManager } from 'react-native-volume-manager';
 import Voice from '@react-native-voice/voice';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Location from 'expo-location';
-import { Camera } from 'expo-camera';
 import { Audio } from 'expo-av';
-import { Accelerometer } from 'expo-sensors';
 import haversine from 'haversine';
 import BASE_URL from '../config/api';
 import * as IntentLauncher from 'expo-intent-launcher';
@@ -93,24 +91,30 @@ export default function EmergencyMonitor() {
             }
         });
 
-        // 5. Setup Shake Listener
-        Accelerometer.setUpdateInterval(400); // 400ms updates to save battery but catch shakes
-        const shakeListener = Accelerometer.addListener(({ x, y, z }: { x: number, y: number, z: number }) => {
-            const force = Math.sqrt(x * x + y * y + z * z);
-            // 1g is gravity. > 2.5g represents a very strong shake.
-            if (force > 2.5 && !listeningRef.current) {
-                const now = Date.now();
-                if (now - lastShakeTime.current > 5000) {
-                    lastShakeTime.current = now;
-                    console.log("SHAKE DETECTED! Force:", force);
-                    activateEmergencyListening();
+        // 5. Setup Shake Listener (safe: expo-sensors may not be available in Expo Go)
+        let shakeListener: { remove: () => void } | null = null;
+        try {
+            const { Accelerometer } = require('expo-sensors');
+            Accelerometer.setUpdateInterval(400);
+            shakeListener = Accelerometer.addListener(({ x, y, z }: { x: number; y: number; z: number }) => {
+                const force = Math.sqrt(x * x + y * y + z * z);
+                if (force > 2.5 && !listeningRef.current) {
+                    const now = Date.now();
+                    if (now - lastShakeTime.current > 5000) {
+                        lastShakeTime.current = now;
+                        console.log('SHAKE DETECTED! Force:', force);
+                        activateEmergencyListening();
+                    }
                 }
-            }
-        });
+            });
+            console.log('Shake detection active.');
+        } catch (e) {
+            console.log('Shake detection unavailable (native module missing):', e);
+        }
 
         return () => {
             volumeListener.remove();
-            shakeListener.remove();
+            if (shakeListener) shakeListener.remove();
         };
     };
 
@@ -123,8 +127,8 @@ export default function EmergencyMonitor() {
             const dataLow = await resLow.json();
             const dataHigh = await resHigh.json();
 
-            const lowList = Array.isArray(dataLow) ? dataLow.map((k: any) => k.keyword_text.toLowerCase()) : [];
-            const highList = Array.isArray(dataHigh) ? dataHigh.map((k: any) => k.keyword_text.toLowerCase()) : [];
+            const lowList = Array.isArray(dataLow) ? dataLow.map((k: any) => k.keyword_text.toLowerCase()).filter((k: string) => k.trim().length > 0) : [];
+            const highList = Array.isArray(dataHigh) ? dataHigh.map((k: any) => k.keyword_text.toLowerCase()).filter((k: string) => k.trim().length > 0) : [];
 
             setLowRiskKeywords(lowList);
             setHighRiskKeywords(highList);
@@ -256,10 +260,16 @@ export default function EmergencyMonitor() {
             // 1. Get Location
             const { status } = await Location.requestForegroundPermissionsAsync();
             if (status !== 'granted') return;
-            const loc = await Location.getCurrentPositionAsync({});
-            console.log("User Location:", loc.coords);
-            const lat = loc.coords.latitude;
-            const lon = loc.coords.longitude;
+            let lat = 0;
+            let lon = 0;
+            try {
+               const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
+               console.log("User Location:", loc.coords);
+               lat = loc.coords.latitude;
+               lon = loc.coords.longitude;
+            } catch (err) {
+               console.log("Location fetch failed, proceeding with fallback", err);
+            }
 
             if (email) {
                 // 2. Fetch contacts

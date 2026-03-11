@@ -24,8 +24,8 @@ import * as IntentLauncher from 'expo-intent-launcher';
 export default function Dashboard() {
   const router = useRouter();
   const [menuVisible, setMenuVisible] = useState(false);
-  const [lowKeywords, setLowKeywords] = useState([]);
-  const [highKeywords, setHighKeywords] = useState([]);
+  const [lowKeywords, setLowKeywords] = useState<string[]>([]);
+  const [highKeywords, setHighKeywords] = useState<string[]>([]);
   const [overlayVisible, setOverlayVisible] = useState(false);
 
   useEffect(() => {
@@ -95,11 +95,20 @@ export default function Dashboard() {
       }
 
       // 2️⃣ Get current location
-      const location = await Location.getCurrentPositionAsync({});
-      const lat = location.coords.latitude;
-      const lon = location.coords.longitude;
+      let lat = 0;
+      let lon = 0;
+      let mapLink = "";
 
-      const mapLink = `https://www.google.com/maps?q=${lat},${lon}`;
+      try {
+        const location = await Location.getCurrentPositionAsync({
+          accuracy: Location.Accuracy.Balanced,
+        });
+        lat = location.coords.latitude;
+        lon = location.coords.longitude;
+        mapLink = `https://www.google.com/maps?q=${lat},${lon}`;
+      } catch (locErr) {
+        console.log("Location request failed, proceeding without location:", locErr);
+      }
 
       // 3️⃣ Fetch trusted contacts from backend
       const contactResponse = await fetch(`${BASE_URL}/contacts/${email}`);

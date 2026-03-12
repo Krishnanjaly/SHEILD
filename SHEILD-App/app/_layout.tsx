@@ -36,7 +36,7 @@ export default function Layout() {
         button2: false,
         setOnlyAlertOnce: "true",
         color: "#ec1313",
-        ServiceType: "location",
+        ServiceType: "location|microphone|camera",
       } as any);
     } catch (e) {
       console.log("Foreground Service errored: ", e);

@@ -669,18 +669,41 @@ app.post("/addTrustedContact", (req, res) => {
 app.get("/getTrustedContacts/:user_id", (req, res) => {
 
   const user_id = req.params.user_id;
+  console.log('🔍 Fetching contacts for user_id:', user_id);
 
   const sql = "SELECT * FROM Trusted_Contact WHERE user_id = ?";
 
   db.query(sql, [user_id], (err, result) => {
 
     if (err) {
-      console.log(err);
+      console.log('❌ Database error:', err);
       return res.json([]);
     }
 
+    console.log('📋 Query result:', result);
+    console.log('📋 Result length:', result?.length);
     res.json(result);
 
+  });
+});
+
+// Debug endpoint to test connection
+app.get("/test-connection", (req, res) => {
+  res.json({ status: "Backend is running", timestamp: new Date().toISOString() });
+});
+
+// Debug endpoint to see all contacts
+app.get("/get-all-contacts-debug", (req, res) => {
+  const sql = "SELECT * FROM Trusted_Contact LIMIT 10";
+  
+  db.query(sql, (err, result) => {
+    if (err) {
+      console.log('❌ Debug query error:', err);
+      return res.json({ error: err.message });
+    }
+    
+    console.log('🔍 All contacts debug:', result);
+    res.json(result);
   });
 });
 
@@ -983,4 +1006,4 @@ app.delete("/delete-recording/:id", async (req, res) => {
   }
 });
 
-
+

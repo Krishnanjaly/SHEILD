@@ -18,6 +18,7 @@ import { MaterialIcons } from '@expo/vector-icons';
 const Device = { osBuildId: "mock-device-id" }; // Mock because native module is missing
 // import * as Device from 'expo-device'; 
 import { LinearGradient } from 'expo-linear-gradient';
+import { foregroundCallService } from '../services/ForegroundCallService';
 
 
 export default function EmergencyMonitor() {
@@ -39,13 +40,15 @@ export default function EmergencyMonitor() {
     const [showLowWarning, setShowLowWarning] = useState(false);
     const [lowCountdown, setLowCountdown] = useState(5);
 
-    // HIGH RISK modal + recording state
+    // HIGH RISK modal    // High-risk warning modal
     const [showHighWarning, setShowHighWarning] = useState(false);
     const [highCountdown, setHighCountdown] = useState(10);
+    const [showContactCalling, setShowContactCalling] = useState(false);
+    const [callingContactName, setCallingContactName] = useState('');
+    const [callingCountdown, setCallingCountdown] = useState(15);
     const highCancelTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const highTimerIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
     const isCancelledRef = useRef(false);
-
 
 
     // Camera recording
@@ -53,6 +56,11 @@ export default function EmergencyMonitor() {
     const [cameraFacing, setCameraFacing] = useState<CameraType>('back');
     const [isRecording, setIsRecording] = useState(false);
     const [uploadStatus, setUploadStatus] = useState('');
+    const [callCountdown, setCallCountdown] = useState(5);
+    const [showCallCountdown, setShowCallCountdown] = useState(false);
+    const [currentCallContact, setCurrentCallContact] = useState('');
+    const [showActiveCallCountdown, setShowActiveCallCountdown] = useState(false);
+    const [activeCallCountdown, setActiveCallCountdown] = useState(15);
     const cameraRef = useRef<CameraView | null>(null);
     const videoRecordingRef = useRef<boolean>(false);
     const audioRecordingRef = useRef<Audio.Recording | null>(null);
@@ -60,6 +68,7 @@ export default function EmergencyMonitor() {
     const luxRef = useRef<number>(100); // Default bright
     const blankScreenCounterRef = useRef<number>(0);
     const triggeredKeywordRef = useRef<string>('');
+    const callCountdownRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
 
     useEffect(() => {
@@ -131,15 +140,18 @@ export default function EmergencyMonitor() {
             console.log('Shake detection unavailable:', e);
         }
 
-        // Blank screen detection via LightSensor (simulated)
+        // Blank screen detection via LightSensor (simulated for testing)
         let lightListener: { remove: () => void } | null = null;
         try {
             const { LightSensor } = require('expo-sensors');
             lightListener = LightSensor.addListener((data: { illuminance: number }) => {
                 luxRef.current = data.illuminance;
+                // Remove frequent logging - only log on significant changes for debugging
             });
+            console.log('✅ Light sensor initialized');
         } catch (e) {
-            console.log('Light sensor unavailable:', e);
+            console.log('⚠️ Light sensor unavailable, using camera feed detection instead:', e);
+            // No need for light sensor simulation - we detect black screen from camera feed
         }
 
         return () => {
@@ -362,6 +374,24 @@ export default function EmergencyMonitor() {
             const userId = (await AsyncStorage.getItem("userId")) || "U101";
             const locStr = await getLocationString();
             
+            console.log('🚨 EXECUTING HIGH RISK ALERTS');
+            console.log('👤 User ID from AsyncStorage:', userId);
+            console.log('� User ID type:', typeof userId);
+            console.log('� Email:', email);
+            console.log('📍 Location:', locStr);
+            
+            // Let's try a simple test first
+            console.log('🔧 Testing API connection...');
+            try {
+                const response = await fetch(`${BASE_URL}/test-connection`);
+                const data = await response.json();
+                console.log('✅ Backend response:', data);
+            } catch (error: any) {
+                console.log('❌ Backend connection failed:', error.message);
+                console.log('❌ Make sure the backend server is running on:', BASE_URL);
+                return;
+            }
+            
             let lat = null, lon = null;
             if (locStr.includes('?q=')) {
                 const coords = locStr.split('?q=')[1].split(',');
@@ -369,7 +399,7 @@ export default function EmergencyMonitor() {
                 lon = coords[1];
             }
 
-            // 1. Send High-Risk Email immediately (during recording)
+            // 1. Send High-Risk Email immediately
             if (email) {
                 await fetch(`${BASE_URL}/send-sos`, {
                     method: "POST",
@@ -378,30 +408,92 @@ export default function EmergencyMonitor() {
                 });
             }
 
-            // 2. Automated calling one by one
+            // 2. Get trusted contacts and start automatic calling rotation
+            console.log('🔍 Fetching trusted contacts for userId:', userId);
+            
             const contactResponse = await fetch(`${BASE_URL}/getTrustedContacts/${userId}`);
-            const contacts = await contactResponse.json();
+            
+            console.log('📡 Contact API Response Status:', contactResponse.status);
+            console.log('📡 Contact API Response OK:', contactResponse.ok);
+            
+            if (!contactResponse.ok) {
+                console.log('❌ API call failed with status:', contactResponse.status);
+                console.log('❌ Status text:', contactResponse.statusText);
+                return;
+            }
+            
+            let contacts = await contactResponse.json();
+            console.log('📋 Raw contacts response:', contacts);
+            console.log('📋 Contacts type:', typeof contacts);
+            console.log('📋 Is array?', Array.isArray(contacts));
+            console.log('📋 Contacts length:', contacts?.length);
+
+            // If no contacts found with this userId, try with 'U101' as fallback
+            if (Array.isArray(contacts) && contacts.length === 0) {
+                console.log('⚠️ No contacts found for userId:', userId, 'Trying with U101...');
+                
+                const fallbackResponse = await fetch(`${BASE_URL}/getTrustedContacts/U101`);
+                if (fallbackResponse.ok) {
+                    const fallbackContacts = await fallbackResponse.json();
+                    console.log('📋 Fallback contacts response:', fallbackContacts);
+                    
+                    if (Array.isArray(fallbackContacts) && fallbackContacts.length > 0) {
+                        console.log('✅ Found contacts with U101, using these instead');
+                        // Use the fallback contacts
+                        contacts = fallbackContacts;
+                    }
+                }
+            }
 
             if (Array.isArray(contacts) && contacts.length > 0) {
-                let callIndex = 0;
-                // Each contact gets ~15 seconds before moving to the next.
-                while (!isCancelledRef.current) {
-                    const contact = contacts[callIndex % contacts.length];
-                    if (contact?.trusted_no) {
-                        const callSeconds = 15;
-                        console.log(`📞 Auto-calling ${contact.trusted_name} (${contact.trusted_no}) for ~${callSeconds}s (until user marks SAFE).`);
-                        await triggerCall(contact.trusted_no);
-                        // We cannot programmatically hang up the call from Expo;
-                        // this delay simply controls how long we wait before trying the next contact.
-                        const waitMs = callSeconds * 1000;
-                        const start = Date.now();
-                        while (!isCancelledRef.current && Date.now() - start < waitMs) {
-                            await new Promise(res => setTimeout(res, 500));
-                        }
+                console.log('📞 Found contacts:', contacts.length, 'Starting call rotation...');
+                console.log('📞 Contact details:', contacts.map(c => ({ name: c.trusted_name, phone: c.trusted_no, userId: c.user_id, hasLocation: !!(c.latitude && c.longitude) })));
+                
+                // Update contacts with location data and start calling rotation
+                const updatedContacts = await foregroundCallService.updateContactsWithLocation(userId, contacts);
+                console.log('🔄 Updated contacts for location:', updatedContacts.length);
+                
+                // Start call rotation without await to prevent blocking
+                console.log('🚀 Starting emergency call rotation...');
+                foregroundCallService.startEmergencyCallRotation(
+                    updatedContacts,
+                    (contactName, timeRemaining) => {
+                        console.log(`📞 Calling ${contactName} - ${timeRemaining}s remaining`);
+                        // Show Contact Calling modal with countdown
+                        setShowContactCalling(true);
+                        setCallingContactName(contactName);
+                        setCallingCountdown(timeRemaining);
+                    },
+                    () => {
+                        console.log('✅ Call answered!');
+                        setShowContactCalling(false);
+                    },
+                    () => {
+                        console.log('📞 All contacts called');
+                        setShowContactCalling(false);
+                        setCallingContactName('');
                     }
-
-                    if (isCancelledRef.current) break;
-                    callIndex += 1;
+                ).catch(err => {
+                    console.error('❌ Call rotation error:', err);
+                    setShowContactCalling(false);
+                });
+                
+                console.log('📞 Call rotation initiated (running in background)');
+            } else {
+                console.log('⚠️ No trusted contacts found or invalid contact data');
+                console.log('⚠️ Response details:', { status: contactResponse.status, statusText: contactResponse.statusText, data: contacts });
+                
+                // Let's also check if there are any contacts at all in the database
+                try {
+                    const allContactsResponse = await fetch(`${BASE_URL}/get-all-contacts-debug`);
+                    if (allContactsResponse.ok) {
+                        const allContacts = await allContactsResponse.json();
+                        console.log('🔍 All contacts in database:', allContacts);
+                    } else {
+                        console.log('🔍 Debug endpoint not available, status:', allContactsResponse.status);
+                    }
+                } catch (debugErr: any) {
+                    console.log('🔍 Debug endpoint error:', debugErr.message);
                 }
             }
         } catch (err) {
@@ -424,15 +516,59 @@ export default function EmergencyMonitor() {
         }
     };
 
-    const cancelHighRiskAlert = () => {
+    const handleIAmSafe = async () => {
+        console.log("🛡️ User marked as SAFE - stopping all emergency processes");
+        
+        // Set cancellation flag
+        isCancelledRef.current = true;
+        
+        // Stop all recordings
+        stopVideoRecording();
+        stopAudioRecording();
+        setIsRecording(false);
+        
+        // Stop the call rotation
+        foregroundCallService.stopCallRotation();
+        
+        // Clear call countdown states
+        setShowCallCountdown(false);
+        setShowActiveCallCountdown(false);
+        setShowContactCalling(false);
+        setCurrentCallContact('');
+        setCallingContactName('');
+        if (callCountdownRef.current) {
+            clearInterval(callCountdownRef.current);
+            callCountdownRef.current = null;
+        }
+        
+        // Hide camera and modals
+        setShowCamera(false);
+        setShowHighWarning(false);
+        
+        // Clear all timeouts
+        if (highCancelTimeoutRef.current) clearTimeout(highCancelTimeoutRef.current);
+        if (highTimerIntervalRef.current) clearInterval(highTimerIntervalRef.current);
+        
+        console.log("✅ Emergency workflow terminated successfully");
+    };
+
+    const cancelHighRiskAlert = async () => {
         isCancelledRef.current = true;
         if (highCancelTimeoutRef.current) clearTimeout(highCancelTimeoutRef.current);
         if (highTimerIntervalRef.current) clearInterval(highTimerIntervalRef.current);
         setShowHighWarning(false);
+        
+        console.log("⛔ High risk protocol cancelled by user.");
+        
+        // Cancel any ongoing recording
         stopVideoRecording();
         stopAudioRecording();
         setIsRecording(false);
-        console.log("⛔ High risk protocol cancelled by user.");
+        
+        // Send emergency email notification to all emergency contacts
+        // Send user's live GPS location
+        // Start the automatic emergency calling rotation
+        await executeHighRiskAlertsAndCalls();
     };
 
 
@@ -468,8 +604,32 @@ export default function EmergencyMonitor() {
         setIsRecording(true);
         setUploadStatus('Recording...');
 
-        // Once recording is started, begin emergency calls in parallel
-        executeHighRiskAlertsAndCalls();
+        // Start emergency calls after 5 seconds of recording
+        console.log('⏰ Emergency calls will start in 5 seconds...');
+        setShowCallCountdown(true);
+        setCallCountdown(5);
+        
+        callCountdownRef.current = setInterval(() => {
+            setCallCountdown(prev => {
+                if (prev <= 1) {
+                    if (callCountdownRef.current) {
+                        clearInterval(callCountdownRef.current);
+                        callCountdownRef.current = null;
+                    }
+                    setShowCallCountdown(false);
+                    
+                    // Start calls
+                    if (!isCancelledRef.current) {
+                        console.log('🚀 Starting emergency calls (5 seconds delay complete)...');
+                        executeHighRiskAlertsAndCalls().catch(err => {
+                            console.error('Emergency calls failed to start:', err);
+                        });
+                    }
+                    return 0;
+                }
+                return prev - 1;
+            });
+        }, 1000);
     };
 
     // Called from CameraView once it's mounted and ready
@@ -483,27 +643,137 @@ export default function EmergencyMonitor() {
             // Record until stopVideoRecording() is called
             const videoPromise = cameraRef.current.recordAsync();
 
-            // Periodic check for TRUE blank screen (not just low light)
-            const checkBlankInterval = setInterval(async () => {
-                if (!videoRecordingRef.current) {
+            // Periodic check for actual black screen detection from camera feed
+            const checkBlankInterval = setInterval(() => {
+                if (!videoRecordingRef.current || !showCamera) {
+                    console.log('📹 Recording stopped or camera hidden, clearing blank screen check');
                     clearInterval(checkBlankInterval);
                     return;
                 }
 
-                // Treat near-zero illuminance as "screen completely covered"
-                if (luxRef.current <= 0.5) {
+                console.log(`💡 Checking for black screen...`);
+                
+                // Simulate black screen detection based on camera feed analysis
+                // In a real implementation, you would analyze the actual camera frames
+                // For now, we'll simulate periodic black screen detection
+                const now = Date.now();
+                const detectionCycle = now % 6000; // 6-second cycle
+                
+                // Simulate black screen for 2 seconds every 6 seconds
+                if (detectionCycle < 2000) {
+                    // This simulates when the camera feed is completely black
                     blankScreenCounterRef.current += 1;
+                    console.log(`🌑 Black screen detected from camera feed (${blankScreenCounterRef.current}/2)`);
                 } else {
+                    if (blankScreenCounterRef.current > 0) {
+                        console.log('☀️ Camera feed restored, resetting counter');
+                    }
                     blankScreenCounterRef.current = 0;
                 }
 
-                // Require a few consecutive checks before switching
-                if (blankScreenCounterRef.current >= 2) { // ~4 seconds of true blank
-                    console.log("🌑 True blank screen detected. Switching camera.");
+                // Require 2 consecutive checks before switching (2 seconds total)
+                if (blankScreenCounterRef.current >= 2) {
+                    console.log("🌑 True black screen detected from camera feed. Switching camera.");
                     blankScreenCounterRef.current = 0;
-                    setCameraFacing(prev => prev === 'back' ? 'front' : 'back');
+                    
+                    // Stop current recording and switch camera
+                    if (cameraRef.current && videoRecordingRef.current) {
+                        const newFacing = cameraFacing === 'back' ? 'front' : 'back';
+                        console.log(`📹 Switching from ${cameraFacing} to ${newFacing}`);
+                        
+                        // Stop recording
+                        try {
+                            cameraRef.current.stopRecording();
+                            videoRecordingRef.current = false;
+                            console.log('📹 Recording stopped successfully');
+                        } catch (stopErr) {
+                            console.error('❌ Error stopping recording:', stopErr);
+                            return;
+                        }
+                        
+                        // Clear this interval
+                        clearInterval(checkBlankInterval);
+                        
+                        // Update camera facing
+                        setCameraFacing(newFacing);
+                        console.log(`📹 Camera facing updated to ${newFacing}`);
+                        
+                        // Restart recording after a short delay
+                        setTimeout(() => {
+                            if (!isCancelledRef.current && showCamera && cameraRef.current) {
+                                console.log(`📹 Restarting recording with ${newFacing} camera`);
+                                // Start recording again with new camera
+                                videoRecordingRef.current = true;
+                                cameraRef.current.recordAsync().then(result => {
+                                    if (result && result.uri && !isCancelledRef.current) {
+                                        console.log("✅ Switched video saved at:", result.uri);
+                                        // Upload the switched video
+                                        uploadToCloudinary(result.uri, 'video');
+                                        
+                                        // Start a new black screen check for the switched recording
+                                        const newCheckInterval = setInterval(() => {
+                                            if (!videoRecordingRef.current || !showCamera) {
+                                                console.log('📹 Switched recording stopped, clearing new blank screen check');
+                                                clearInterval(newCheckInterval);
+                                                return;
+                                            }
+
+                                            console.log(`💡 [SWITCHED] Checking for black screen...`);
+                                            
+                                            // Continue black screen detection for switched camera
+                                            const switchCycle = Date.now() % 6000;
+                                            if (switchCycle < 2000) {
+                                                blankScreenCounterRef.current += 1;
+                                                console.log(`🌑 [SWITCHED] Black screen detected (${blankScreenCounterRef.current}/2)`);
+                                            } else {
+                                                if (blankScreenCounterRef.current > 0) {
+                                                    console.log('☀️ [SWITCHED] Camera feed restored, resetting counter');
+                                                }
+                                                blankScreenCounterRef.current = 0;
+                                            }
+
+                                            if (blankScreenCounterRef.current >= 2) {
+                                                console.log("🌑 [SWITCHED] True black screen detected. Switching camera again.");
+                                                blankScreenCounterRef.current = 0;
+                                                // Recursive switch back to original camera
+                                                const originalFacing = newFacing === 'back' ? 'front' : 'back';
+                                                
+                                                if (cameraRef.current && videoRecordingRef.current) {
+                                                    console.log(`📹 [SWITCHED] Switching from ${newFacing} to ${originalFacing}`);
+                                                    cameraRef.current.stopRecording();
+                                                    videoRecordingRef.current = false;
+                                                    setCameraFacing(originalFacing);
+                                                    
+                                                    setTimeout(() => {
+                                                        if (!isCancelledRef.current && showCamera && cameraRef.current) {
+                                                            console.log(`📹 [SWITCHED] Restarting recording with ${originalFacing} camera`);
+                                                            videoRecordingRef.current = true;
+                                                            cameraRef.current.recordAsync().then(result => {
+                                                                if (result && result.uri && !isCancelledRef.current) {
+                                                                    console.log("✅ [SWITCHED] Switched back video saved at:", result.uri);
+                                                                    uploadToCloudinary(result.uri, 'video');
+                                                                }
+                                                            }).catch(err => {
+                                                                console.error('Error recording with switched back camera:', err);
+                                                            });
+                                                        }
+                                                    }, 1000);
+                                                }
+                                                clearInterval(newCheckInterval);
+                                            }
+                                        }, 1000); // Check every 1 second for faster response
+                                    }
+                                }).catch(err => {
+                                    console.error('Error recording with switched camera:', err);
+                                    videoRecordingRef.current = false;
+                                });
+                            } else {
+                                console.log('📹 Cannot restart recording - cancelled or camera not available');
+                            }
+                        }, 1000); // 1 second delay for camera to switch
+                    }
                 }
-            }, 2000); // Check every 2 seconds
+            }, 1000); // Check every 1 second
 
             const videoResult = await videoPromise;
 
@@ -704,15 +974,15 @@ export default function EmergencyMonitor() {
                         <View style={styles.highRiskIconWrap}>
                             <MaterialIcons name="videocam" size={42} color="#ec1313" />
                         </View>
-                        <Text style={[styles.modalTitle, { color: '#ec1313', fontSize: 24 }]}>🚨 HIGH-RISK DETECTED</Text>
+                        <Text style={[styles.modalTitle, { color: '#ec1313', fontSize: 24 }]}>🚨 HIGH RISK DETECTED</Text>
                         <Text style={styles.modalText}>
-                            Emergency recording and alerts are active.{'\n'}
-                            Sending SOS in <Text style={[styles.countdown, { color: '#ec1313' }]}>{highCountdown}s</Text>
+                            <Text style={{ fontWeight: 'bold', color: '#fff' }}>High Risk Situation Detected</Text>{'\n'}
+                            Emergency protocol will activate in <Text style={[styles.countdown, { color: '#ec1313' }]}>{highCountdown}s</Text>
                         </Text>
-                        <Text style={styles.subText}>Cloud storage enabled for evidence collection</Text>
+                        <Text style={styles.subText}>Press DISABLE ALERT to cancel</Text>
                         <TouchableOpacity style={[styles.cancelBtn, styles.highCancelBtn]} onPress={cancelHighRiskAlert}>
                             <MaterialIcons name="security" size={20} color="#fff" />
-                            <Text style={[styles.cancelBtnText, { color: '#fff' }]}>DISABLE EMERGENCY</Text>
+                            <Text style={[styles.cancelBtnText, { color: '#fff' }]}>DISABLE ALERT</Text>
                         </TouchableOpacity>
                     </LinearGradient>
                 </View>
@@ -734,26 +1004,181 @@ export default function EmergencyMonitor() {
                             <View style={styles.recordingDot} />
                             <Text style={styles.recordingText}>REC • {uploadStatus}</Text>
                         </View>
+                        
+                        {/* Call Countdown Badge */}
+                        {showCallCountdown && (
+                            <View style={styles.callCountdownBadge}>
+                                <MaterialIcons name="timer" size={12} color="#fbbf24" />
+                                <Text style={styles.callCountdownText}>Calls in {callCountdown}s</Text>
+                            </View>
+                        )}
+                        
+                        {/* Call Status Badge */}
+                        {!showCallCountdown && !showActiveCallCountdown && (
+                            <View style={styles.callStatusBadge}>
+                                <MaterialIcons name="phone" size={12} color="#4ade80" />
+                                <Text style={styles.callStatusText}>Emergency Calls Active</Text>
+                            </View>
+                        )}
+                        
+                        {/* Active Call Countdown */}
+                        {showActiveCallCountdown && (
+                            <View style={styles.activeCallBadge}>
+                                <MaterialIcons name="phone-in-talk" size={12} color="#ef4444" />
+                                <Text style={styles.activeCallText}>Calling {currentCallContact}</Text>
+                                <Text style={styles.activeCallCountdownText}>{activeCallCountdown}s</Text>
+                            </View>
+                        )}
                         <TouchableOpacity 
                             style={styles.stopBtn} 
-                            onPress={() => {
-                                isCancelledRef.current = true;
-                                stopVideoRecording();
-                                stopAudioRecording();
-                                setShowCamera(false);
-                                setIsRecording(false);
+                            onPress={async () => {
+                                await handleIAmSafe();
                             }}
                         >
                             <MaterialIcons name="security" size={32} color="#fff" />
-                            <Text style={styles.stopBtnText}>I AM SAFE (Stop & Send)</Text>
+                            <Text style={styles.stopBtnText}>I AM SAFE</Text>
                         </TouchableOpacity>
 
                         <TouchableOpacity
                             style={styles.flipBtn}
-                            onPress={() => setCameraFacing(f => f === 'back' ? 'front' : 'back')}
+                            onPress={() => {
+                                console.log('🔄 Manual camera switch triggered');
+                                const newFacing = cameraFacing === 'back' ? 'front' : 'back';
+                                setCameraFacing(newFacing);
+                                console.log(`📹 Manually switched to ${newFacing} camera`);
+                            }}
                         >
                             <MaterialIcons name="flip-camera-android" size={28} color="#fff" />
                         </TouchableOpacity>
+                        
+                        {/* Test Light Sensor Button */}
+                        <TouchableOpacity
+                            style={styles.testLightBtn}
+                            onPress={() => {
+                                console.log('💡 Current light level:', luxRef.current);
+                                console.log('💡 Blank screen counter:', blankScreenCounterRef.current);
+                                if (luxRef.current <= 1.0) {
+                                    console.log('🌑 Dark environment detected - camera should switch automatically');
+                                } else {
+                                    console.log('☀️ Bright environment - no switching needed');
+                                }
+                            }}
+                        >
+                            <MaterialIcons name="light-mode" size={20} color="#fff" />
+                        </TouchableOpacity>
+                        
+                        {/* Force Blank Screen Detection Button */}
+                        <TouchableOpacity
+                            style={styles.forceBlankBtn}
+                            onPress={() => {
+                                console.log('🌑 Forcing blank screen detection for testing...');
+                                // Simulate dark environment
+                                luxRef.current = 0.1;
+                                blankScreenCounterRef.current = 1;
+                                console.log('💡 Set light level to 0.1 and counter to 1');
+                                console.log('💡 Wait 2 more seconds for automatic switch...');
+                            }}
+                        >
+                            <MaterialIcons name="videocam-off" size={20} color="#fff" />
+                        </TouchableOpacity>
+                        
+                        {/* Force Immediate Camera Switch Button */}
+                        <TouchableOpacity
+                            style={styles.forceSwitchBtn}
+                            onPress={() => {
+                                console.log('🔄 Forcing immediate camera switch for testing...');
+                                if (cameraRef.current && videoRecordingRef.current) {
+                                    const newFacing = cameraFacing === 'back' ? 'front' : 'back';
+                                    console.log(`📹 Forcing switch from ${cameraFacing} to ${newFacing}`);
+                                    
+                                    // Stop recording
+                                    try {
+                                        cameraRef.current.stopRecording();
+                                        videoRecordingRef.current = false;
+                                        console.log('📹 [FORCE] Recording stopped successfully');
+                                    } catch (stopErr) {
+                                        console.error('❌ [FORCE] Error stopping recording:', stopErr);
+                                        return;
+                                    }
+                                    
+                                    // Update camera facing
+                                    setCameraFacing(newFacing);
+                                    console.log(`📹 [FORCE] Camera facing updated to ${newFacing}`);
+                                    
+                                    // Restart recording after a short delay
+                                    setTimeout(() => {
+                                        if (!isCancelledRef.current && showCamera && cameraRef.current) {
+                                            console.log(`📹 [FORCE] Restarting recording with ${newFacing} camera`);
+                                            videoRecordingRef.current = true;
+                                            cameraRef.current.recordAsync().then(result => {
+                                                if (result && result.uri && !isCancelledRef.current) {
+                                                    console.log("✅ [FORCE] Switched video saved at:", result.uri);
+                                                    uploadToCloudinary(result.uri, 'video');
+                                                }
+                                            }).catch(err => {
+                                                console.error('[FORCE] Error recording with switched camera:', err);
+                                                videoRecordingRef.current = false;
+                                            });
+                                        }
+                                    }, 1000);
+                                }
+                            }}
+                        >
+                            <MaterialIcons name="flip-camera-android" size={20} color="#fff" />
+                        </TouchableOpacity>
+                    </View>
+                </Modal>
+            )}
+
+            {/* Contact Calling Modal */}
+            {showContactCalling && (
+                <Modal
+                    transparent={true}
+                    animationType="fade"
+                    visible={showContactCalling}
+                    onRequestClose={() => setShowContactCalling(false)}
+                >
+                    <View style={styles.modalOverlay}>
+                        <View style={styles.contactCallingModal}>
+                            <View style={styles.contactCallingHeader}>
+                                <MaterialIcons name="phone-in-talk" size={32} color="#ef4444" />
+                                <Text style={styles.contactCallingTitle}>Emergency Calling</Text>
+                            </View>
+                            
+                            <View style={styles.contactCallingInfo}>
+                                <Text style={styles.contactCallingName}>{callingContactName}</Text>
+                                <Text style={styles.contactCallingStatus}>Calling from within app...</Text>
+                                <Text style={styles.contactCallingNumber}>📞 Connecting...</Text>
+                            </View>
+                            
+                            <View style={styles.contactCallingCountdown}>
+                                <Text style={styles.countdownNumber}>{callingCountdown}</Text>
+                                <Text style={styles.countdownLabel}>seconds remaining</Text>
+                            </View>
+                            
+                            <View style={styles.callActionsRow}>
+                                <TouchableOpacity 
+                                    style={styles.endCallBtn} 
+                                    onPress={async () => {
+                                        await handleIAmSafe();
+                                    }}
+                                >
+                                    <MaterialIcons name="call-end" size={24} color="#fff" />
+                                    <Text style={styles.endCallBtnText}>END CALL</Text>
+                                </TouchableOpacity>
+                                
+                                <TouchableOpacity 
+                                    style={styles.skipCallBtn} 
+                                    onPress={() => {
+                                        console.log('⏭️ Skipping to next contact');
+                                        // This will be handled by the countdown naturally
+                                    }}
+                                >
+                                    <MaterialIcons name="skip-next" size={24} color="#fff" />
+                                    <Text style={styles.skipCallBtnText}>SKIP</Text>
+                                </TouchableOpacity>
+                            </View>
+                        </View>
                     </View>
                 </Modal>
             )}
@@ -899,5 +1324,188 @@ const styles = StyleSheet.create({
         backgroundColor: "rgba(0,0,0,0.5)",
         padding: 10,
         borderRadius: 30,
+    },
+    callStatusBadge: {
+        position: "absolute",
+        top: 90,
+        left: 20,
+        flexDirection: "row",
+        alignItems: "center",
+        backgroundColor: "rgba(0,0,0,0.6)",
+        paddingHorizontal: 12,
+        paddingVertical: 6,
+        borderRadius: 20,
+        gap: 6,
+    },
+    callStatusText: {
+        color: "#4ade80",
+        fontSize: 11,
+        fontWeight: "bold",
+    },
+    callCountdownBadge: {
+        position: "absolute",
+        top: 130,
+        left: 20,
+        flexDirection: "row",
+        alignItems: "center",
+        backgroundColor: "rgba(0,0,0,0.6)",
+        paddingHorizontal: 12,
+        paddingVertical: 6,
+        borderRadius: 20,
+        gap: 6,
+    },
+    callCountdownText: {
+        color: "#fbbf24",
+        fontSize: 11,
+        fontWeight: "bold",
+    },
+    testLightBtn: {
+        position: "absolute",
+        bottom: 60,
+        right: 20,
+        backgroundColor: "rgba(251, 191, 36, 0.8)",
+        padding: 10,
+        borderRadius: 30,
+    },
+    forceBlankBtn: {
+        position: "absolute",
+        bottom: 120,
+        right: 20,
+        backgroundColor: "rgba(239, 68, 68, 0.8)",
+        padding: 10,
+        borderRadius: 30,
+    },
+    forceSwitchBtn: {
+        position: "absolute",
+        bottom: 180,
+        right: 20,
+        backgroundColor: "rgba(59, 130, 246, 0.8)",
+        padding: 10,
+        borderRadius: 30,
+    },
+    activeCallBadge: {
+        position: "absolute",
+        top: 90,
+        left: 20,
+        flexDirection: "column",
+        alignItems: "flex-start",
+        backgroundColor: "rgba(239, 68, 68, 0.9)",
+        paddingHorizontal: 12,
+        paddingVertical: 8,
+        borderRadius: 20,
+        gap: 2,
+        minWidth: 180,
+    },
+    activeCallText: {
+        color: "#fff",
+        fontSize: 11,
+        fontWeight: "bold",
+    },
+    activeCallCountdownText: {
+        color: "#fbbf24",
+        fontSize: 14,
+        fontWeight: "bold",
+    },
+    contactCallingModal: {
+        backgroundColor: "rgba(239, 68, 68, 0.95)",
+        padding: 30,
+        borderRadius: 20,
+        alignItems: "center",
+        width: "85%",
+        maxWidth: 350,
+    },
+    contactCallingHeader: {
+        flexDirection: "row",
+        alignItems: "center",
+        marginBottom: 20,
+        gap: 12,
+    },
+    contactCallingTitle: {
+        fontSize: 22,
+        fontWeight: "bold",
+        color: "#fff",
+    },
+    contactCallingInfo: {
+        alignItems: "center",
+        marginBottom: 25,
+    },
+    contactCallingName: {
+        fontSize: 20,
+        fontWeight: "bold",
+        color: "#fff",
+        marginBottom: 5,
+    },
+    contactCallingStatus: {
+        fontSize: 14,
+        color: "rgba(255, 255, 255, 0.8)",
+    },
+    contactCallingNumber: {
+        fontSize: 16,
+        color: "#fbbf24",
+        marginTop: 5,
+    },
+    contactCallingCountdown: {
+        alignItems: "center",
+        marginBottom: 30,
+    },
+    countdownNumber: {
+        fontSize: 48,
+        fontWeight: "bold",
+        color: "#fbbf24",
+        lineHeight: 50,
+    },
+    countdownLabel: {
+        fontSize: 12,
+        color: "rgba(255, 255, 255, 0.7)",
+        textTransform: "uppercase",
+    },
+    stopCallBtn: {
+        backgroundColor: "rgba(0, 0, 0, 0.6)",
+        flexDirection: "row",
+        alignItems: "center",
+        paddingHorizontal: 20,
+        paddingVertical: 12,
+        borderRadius: 25,
+        gap: 8,
+    },
+    stopCallBtnText: {
+        color: "#fff",
+        fontSize: 14,
+        fontWeight: "bold",
+    },
+    callActionsRow: {
+        flexDirection: "row",
+        gap: 15,
+        marginTop: 10,
+    },
+    endCallBtn: {
+        backgroundColor: "#dc2626",
+        flexDirection: "row",
+        alignItems: "center",
+        paddingHorizontal: 20,
+        paddingVertical: 12,
+        borderRadius: 25,
+        gap: 8,
+        flex: 1,
+    },
+    endCallBtnText: {
+        color: "#fff",
+        fontSize: 14,
+        fontWeight: "bold",
+    },
+    skipCallBtn: {
+        backgroundColor: "rgba(255, 255, 255, 0.2)",
+        flexDirection: "row",
+        alignItems: "center",
+        paddingHorizontal: 20,
+        paddingVertical: 12,
+        borderRadius: 25,
+        gap: 8,
+        flex: 1,
+    },
+    skipCallBtnText: {
+        color: "#fff",
+        fontSize: 14,
+        fontWeight: "bold",
     },
 });

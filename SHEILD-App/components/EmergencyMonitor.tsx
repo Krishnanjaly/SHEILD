@@ -58,6 +58,7 @@ export default function EmergencyMonitor() {
     const audioRecordingRef = useRef<Audio.Recording | null>(null);
     const [cameraPermission, requestCameraPermission] = useCameraPermissions();
     const luxRef = useRef<number>(100); // Default bright
+    const blankScreenCounterRef = useRef<number>(0);
     const triggeredKeywordRef = useRef<string>('');
 
 
@@ -327,27 +328,29 @@ export default function EmergencyMonitor() {
         if (highTimerIntervalRef.current) clearInterval(highTimerIntervalRef.current);
         if (highCancelTimeoutRef.current) clearTimeout(highCancelTimeoutRef.current);
 
+        // 10s countdown UI
         highTimerIntervalRef.current = setInterval(() => {
             setHighCountdown(prev => {
-                if (prev <= 1) { clearInterval(highTimerIntervalRef.current!); return 0; }
+                if (prev <= 1) {
+                    clearInterval(highTimerIntervalRef.current!);
+                    return 0;
+                }
                 return prev - 1;
             });
         }, 1000);
 
-        // Start recording IMMEDIATELY
-        startHighRiskRecording();
-
-        // Start alerts and sequential calls
-        executeHighRiskAlertsAndCalls();
-
-        // After 10 seconds, if not cancelled → proceed with alerts
+        // After 10 seconds, if NOT cancelled → start recording (which will also trigger calls)
         highCancelTimeoutRef.current = setTimeout(() => {
             clearInterval(highTimerIntervalRef.current!);
             setShowHighWarning(false);
-            // alerts are handled after recording finishes or via some flag
-            console.log("High risk protocol confirmed after 10s");
-            // If recording is already done, it will upload. 
-            // If not, we can let it finish and upload.
+
+            if (isCancelledRef.current) {
+                console.log("High risk protocol cancelled within 10s window.");
+                return;
+            }
+
+            console.log("High risk protocol confirmed after 10s. Starting recording.");
+            startHighRiskRecording();
         }, 10000);
     };
 
@@ -356,7 +359,7 @@ export default function EmergencyMonitor() {
     const executeHighRiskAlertsAndCalls = async () => {
         try {
             const email = await AsyncStorage.getItem("userEmail");
-            const userId = await AsyncStorage.getItem("userId");
+            const userId = (await AsyncStorage.getItem("userId")) || "U101";
             const locStr = await getLocationString();
             
             let lat = null, lon = null;
@@ -379,13 +382,26 @@ export default function EmergencyMonitor() {
             const contactResponse = await fetch(`${BASE_URL}/getTrustedContacts/${userId}`);
             const contacts = await contactResponse.json();
 
-            if (Array.isArray(contacts)) {
-                for (const c of contacts) {
-                    if (c.trusted_no && !isCancelledRef.current) {
-                        console.log(`📞 Sequential Calling: ${c.trusted_name} (${c.trusted_no})`);
-                        await triggerCall(c.trusted_no);
-                        await new Promise(res => setTimeout(res, 9000)); // Delay between dials
+            if (Array.isArray(contacts) && contacts.length > 0) {
+                let callIndex = 0;
+                // Each contact gets ~15 seconds before moving to the next.
+                while (!isCancelledRef.current) {
+                    const contact = contacts[callIndex % contacts.length];
+                    if (contact?.trusted_no) {
+                        const callSeconds = 15;
+                        console.log(`📞 Auto-calling ${contact.trusted_name} (${contact.trusted_no}) for ~${callSeconds}s (until user marks SAFE).`);
+                        await triggerCall(contact.trusted_no);
+                        // We cannot programmatically hang up the call from Expo;
+                        // this delay simply controls how long we wait before trying the next contact.
+                        const waitMs = callSeconds * 1000;
+                        const start = Date.now();
+                        while (!isCancelledRef.current && Date.now() - start < waitMs) {
+                            await new Promise(res => setTimeout(res, 500));
+                        }
                     }
+
+                    if (isCancelledRef.current) break;
+                    callIndex += 1;
                 }
             }
         } catch (err) {
@@ -414,8 +430,9 @@ export default function EmergencyMonitor() {
         if (highTimerIntervalRef.current) clearInterval(highTimerIntervalRef.current);
         setShowHighWarning(false);
         stopVideoRecording();
+        stopAudioRecording();
         setIsRecording(false);
-        console.log("⛔ High risk recording cancelled by user.");
+        console.log("⛔ High risk protocol cancelled by user.");
     };
 
 
@@ -450,6 +467,9 @@ export default function EmergencyMonitor() {
         setShowCamera(true);
         setIsRecording(true);
         setUploadStatus('Recording...');
+
+        // Once recording is started, begin emergency calls in parallel
+        executeHighRiskAlertsAndCalls();
     };
 
     // Called from CameraView once it's mounted and ready
@@ -463,20 +483,27 @@ export default function EmergencyMonitor() {
             // Record until stopVideoRecording() is called
             const videoPromise = cameraRef.current.recordAsync();
 
-
-            // Periodic check for blank screen
+            // Periodic check for TRUE blank screen (not just low light)
             const checkBlankInterval = setInterval(async () => {
                 if (!videoRecordingRef.current) {
                     clearInterval(checkBlankInterval);
                     return;
                 }
-                
-                if (luxRef.current < 5) { // < 5 lux = very dark/blank
-                    console.log("🌑 Blank screen/Low light detected (2s)! Switching camera.");
+
+                // Treat near-zero illuminance as "screen completely covered"
+                if (luxRef.current <= 0.5) {
+                    blankScreenCounterRef.current += 1;
+                } else {
+                    blankScreenCounterRef.current = 0;
+                }
+
+                // Require a few consecutive checks before switching
+                if (blankScreenCounterRef.current >= 2) { // ~4 seconds of true blank
+                    console.log("🌑 True blank screen detected. Switching camera.");
+                    blankScreenCounterRef.current = 0;
                     setCameraFacing(prev => prev === 'back' ? 'front' : 'back');
                 }
             }, 2000); // Check every 2 seconds
-
 
             const videoResult = await videoPromise;
 
@@ -557,7 +584,7 @@ export default function EmergencyMonitor() {
     const uploadToCloudinary = async (localUri: string, type: 'video' | 'audio') => {
         try {
             const email = await AsyncStorage.getItem("userEmail");
-            const userId = await AsyncStorage.getItem("userId");
+            const userId = (await AsyncStorage.getItem("userId")) || "U101";
             if (!email) return;
 
             // 1. Get signature from backend
@@ -710,6 +737,7 @@ export default function EmergencyMonitor() {
                         <TouchableOpacity 
                             style={styles.stopBtn} 
                             onPress={() => {
+                                isCancelledRef.current = true;
                                 stopVideoRecording();
                                 stopAudioRecording();
                                 setShowCamera(false);

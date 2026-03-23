@@ -520,6 +520,7 @@ export default function Dashboard() {
           <FeatureButton icon="phone-in-talk" label="Fake Call" route="/fake-call" />
           <FeatureButton icon="call" label="Helpline Numbers" route="/helpline" />
           <FeatureButton icon="storage" label="Cloud Storage" route="/cloud-storage" />
+          <FeatureButton icon="qr-code" label="QR Emergency" route="/qr" />
           <FeatureButton icon="verified-user" label="Trusted Circles" route="/trustedCircles" />
           <FeatureButton icon="smart-toy" label="AI Guardian" route="/guardian" />
           <FeatureButton icon="history" label="Recent Activity" route="/log" />

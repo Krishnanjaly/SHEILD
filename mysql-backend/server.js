@@ -22,6 +22,8 @@ const multer = require("multer");
 const cloudinary = require("cloudinary").v2;
 const fs = require("fs");
 const path = require("path");
+const crypto = require("crypto");
+const os = require("os");
 require("dotenv").config();
 
 const app = express();
@@ -1070,6 +1072,202 @@ app.delete("/delete-cloudinary/:publicId", async (req, res) => {
       error: err.message 
     });
   }
+});
+
+
+
+/* ===================================================
+   🔹 QR EMERGENCY ACCESS ENDPOINTS
+=================================================== */
+
+// Function to get local IP address for QR URL
+const getLocalIp = () => {
+    const interfaces = os.networkInterfaces();
+    let backupIp = 'localhost';
+    
+    // Check prioritised interfaces first
+    const prioritisations = ['Wi-Fi', 'Ethernet', 'Wireless', 'en0', 'wlan0'];
+    
+    for (const name of prioritisations) {
+        const iface = interfaces[name];
+        if (iface) {
+            for (const alias of iface) {
+                if (alias.family === 'IPv4' && !alias.internal) {
+                    return alias.address;
+                }
+            }
+        }
+    }
+
+    // Fallback search
+    for (const devName in interfaces) {
+        const iface = interfaces[devName];
+        if (devName.toLowerCase().includes('vbox') || devName.toLowerCase().includes('virtual') || devName.toLowerCase().includes('wsl')) continue;
+        
+        for (let i = 0; i < iface.length; i++) {
+            const alias = iface[i];
+            if (alias.family === 'IPv4' && alias.address !== '127.0.0.1' && !alias.internal) {
+                return alias.address;
+            }
+        }
+    }
+    return backupIp;
+};
+
+/**
+ * Endpoint to generate/fetch secure QR token for user
+ * GET /generate-qr/:userId
+ */
+app.get("/generate-qr/:userId", async (req, res) => {
+    const { userId } = req.params;
+    const localIp = getLocalIp();
+
+    try {
+        // 1. Check if user already has a token
+        const [rows] = await db.promise().query(
+            "SELECT qr_token FROM users WHERE id = ?", [userId]
+        );
+
+        if (rows.length === 0) return res.status(404).json({ message: "User not found" });
+
+        let token = rows[0].qr_token;
+
+        // 2. If no token, generate one
+        if (!token) {
+            token = crypto.randomBytes(16).toString('hex');
+            await db.promise().query(
+                "UPDATE users SET qr_token = ? WHERE id = ?", [token, userId]
+            );
+        }
+
+        const qrUrl = `http://${localIp}:${PORT}/sos-trigger/${token}`;
+
+        res.json({
+            token,
+            qrUrl
+        });
+
+    } catch (err) {
+        console.error("Generate QR Error:", err);
+        res.status(500).json({ message: "Server error" });
+    }
+});
+
+/**
+ * Endpoint triggered when someone scans the emergency QR code
+ * GET /sos-trigger/:token
+ */
+app.get("/sos-trigger/:token", async (req, res) => {
+    const { token } = req.params;
+
+    try {
+        // 1. Find user by token
+        const [userRows] = await db.promise().query(
+            "SELECT id, name, email FROM users WHERE qr_token = ?", [token]
+        );
+
+        if (userRows.length === 0) {
+            return res.status(404).send("<h1>Error</h1><p>Invalid or expired emergency token.</p>");
+        }
+
+        const user = userRows[0];
+        
+        res.send(`
+            <!DOCTYPE html>
+            <html>
+            <head>
+                <meta name="viewport" content="width=device-width, initial-scale=1.0">
+                <style>
+                    body { font-family: sans-serif; background: #181111; color: #fff; text-align: center; padding: 50px 20px; }
+                    .card { background: #2a1b1b; padding: 30px; border-radius: 20px; border: 1px solid #ec1313; }
+                    .btn { background: #ec1313; color: white; padding: 15px 30px; border-radius: 10px; text-decoration: none; display: inline-block; font-weight: bold; margin-top: 20px; border: none; cursor: pointer; }
+                    h1 { color: #ec1313; }
+                </style>
+            </head>
+            <body>
+                <div class="card">
+                    <h1>🚨 EMERGENCY</h1>
+                    <p>You have scanned the emergency code for <strong>${user.name}</strong>.</p>
+                    <p>Are you sure you want to send an emergency alert to their trusted contacts?</p>
+                    
+                    <form action="/sos-confirm/${token}" method="POST">
+                        <button type="submit" class="btn">CONFIRM & SEND ALERT</button>
+                    </form>
+                    
+                    <p style="margin-top:20px; color:#888; font-size: 12px;">This will share their current known location with their family.</p>
+                </div>
+            </body>
+            </html>
+        `);
+    } catch (err) {
+        console.error("SOS Trigger Error:", err);
+        res.status(500).send("Server Error");
+    }
+});
+
+/**
+ * Confirm post request from the web trigger
+ * POST /sos-confirm/:token
+ */
+app.post("/sos-confirm/:token", async (req, res) => {
+    const { token } = req.params;
+
+    try {
+        const [userRows] = await db.promise().query(
+            "SELECT id, name, email FROM users WHERE qr_token = ?", [token]
+        );
+
+        if (userRows.length === 0) return res.status(404).send("Invalid Token");
+
+        const user = userRows[0];
+
+        // Fetch trusted contacts
+        const [contacts] = await db.promise().query(
+            "SELECT contact_email FROM contacts WHERE user_id = ? AND contact_email IS NOT NULL AND contact_email != ''",
+            [user.id]
+        );
+
+        if (contacts.length > 0) {
+            const recipients = contacts.map(c => c.contact_email).filter(Boolean);
+            
+            await transporter.sendMail({
+                from: `"SHIELD Guardian" <${process.env.EMAIL_USER}>`,
+                to: recipients,
+                subject: `🚨 QR EMERGENCY ALERT for ${user.name}`,
+                text: `URGENT: Someone has scanned the emergency QR code for ${user.name}.\n\nPlease check on them immediately!\n\nThis alert was triggered via a QR scan by a bystander.`,
+            });
+            
+            await db.promise().query(
+                "INSERT INTO emergency_incidents (user_id, detected_keyword, status) VALUES (?, ?, ?)",
+                [user.id, "QR_SCAN_SOS", "EMAIL_SENT"]
+            );
+        }
+
+        res.send(`
+            <!DOCTYPE html>
+            <html>
+            <head>
+                <meta name="viewport" content="width=device-width, initial-scale=1.0">
+                <style>
+                    body { font-family: sans-serif; background: #181111; color: #fff; text-align: center; padding: 50px 20px; }
+                    .card { background: #2a1b1b; padding: 30px; border-radius: 20px; border: 1px solid #22c55e; }
+                    h1 { color: #22c55e; }
+                </style>
+            </head>
+            <body>
+                <div class="card">
+                    <h1>✅ ALERT SENT</h1>
+                    <p>The emergency alert has been sent to <strong>${user.name}'s</strong> trusted contacts.</p>
+                    <p>Thank you for your help.</p>
+                </div>
+            </body>
+            </html>
+        `);
+
+    } catch (err) {
+        console.error("SOS Confirm Error:", err);
+        res.status(500).send("Server Error");
+    }
 });
 
 

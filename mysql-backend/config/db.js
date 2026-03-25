@@ -1,12 +1,14 @@
 const mysql = require("mysql2");
 require("dotenv").config();
 
-// Create connection pool using either a single URL or individual variables
+const url = new URL(process.env.DB_URL);
+
 const pool = mysql.createPool({
-  host: process.env.DB_HOST,
-  user: process.env.DB_USER,
-  password: process.env.DB_PASSWORD,
-  database: process.env.DB_NAME,
+  host: url.hostname,
+  user: url.username,
+  password: url.password,
+  database: url.pathname.replace("/", ""),
+  port: url.port,
   ssl: {
     rejectUnauthorized: false,
   },

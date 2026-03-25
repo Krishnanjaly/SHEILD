@@ -78,12 +78,7 @@ class AiRiskEngine {
                 if (magnitude > MOVEMENT_THRESHOLD) {
                     console.log(`🤖 AiRiskEngine: Suspicious movement detected (${magnitude.toFixed(2)}). Starting full analysis.`);
                     
-                    ActivityService.logActivity({
-                        type: 'AI_RISK',
-                        level: 'LOW',
-                        title: 'Suspicious Movement',
-                        details: `Magnitude ${magnitude.toFixed(2)} detected in passive mode. Activating full sensor scan.`
-                    });
+                    ActivityService.logActivity(`AI RISK: Suspicious movement detected (Magnitude ${magnitude.toFixed(2)})`);
 
                     this.startFullAnalysis();
                 }

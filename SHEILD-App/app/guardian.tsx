@@ -188,12 +188,7 @@ export default function Guardian() {
                             await aiRiskEngine.startFullAnalysis();
                             setIsFullAnalysis(true);
                             
-                            ActivityService.logActivity({
-                                type: 'AI_RISK',
-                                level: 'INFO',
-                                title: 'Manual Enhanced Monitoring',
-                                details: 'User explicitly started Full AI analysis mode'
-                            });
+                             ActivityService.logActivity('Manual Enhanced Monitoring: User explicitly started Full AI analysis mode');
                         }}
                     >
                         <MaterialIcons name="radar" size={22} color="#ec1313" />

@@ -14,6 +14,7 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import BASE_URL from "../config/api";
 import * as WebBrowser from "expo-web-browser";
 import * as Google from "expo-auth-session/providers/google";
+import * as AuthSession from "expo-auth-session";
 
 WebBrowser.maybeCompleteAuthSession();
 
@@ -21,9 +22,15 @@ export default function PhoneScreen() {
   const router = useRouter();
   const [loading, setLoading] = useState(false);
 
-  // Google Auth Setup
+  // Google Auth Setup (Production Ready)
+  const redirectUri = AuthSession.makeRedirectUri({
+    scheme: "sheildapp",
+  });
+
   const [request, response, promptAsync] = Google.useAuthRequest({
+    androidClientId: "158206063504-4477q0hgvhf2krtp348stralccv2cmki.apps.googleusercontent.com",
     webClientId: "158206063504-05kjh8j70kg11es9rn4th0d3egcklh1l.apps.googleusercontent.com",
+    redirectUri,
   });
 
   /* ================================

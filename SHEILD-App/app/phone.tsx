@@ -23,14 +23,9 @@ export default function PhoneScreen() {
   const [loading, setLoading] = useState(false);
 
   // Google Auth Setup (Production Ready)
-  const redirectUri = AuthSession.makeRedirectUri({
-    scheme: "sheildapp",
-  });
-
   const [request, response, promptAsync] = Google.useAuthRequest({
     androidClientId: "158206063504-4477q0hgvhf2krtp348stralccv2cmki.apps.googleusercontent.com",
     webClientId: "158206063504-05kjh8j70kg11es9rn4th0d3egcklh1l.apps.googleusercontent.com",
-    redirectUri,
   });
 
   /* ================================
@@ -50,9 +45,16 @@ export default function PhoneScreen() {
      ✅ Handle Google Response
   ================================= */
   useEffect(() => {
-    if (response?.type === "success") {
-      const { authentication } = response;
-      fetchUserInfo(authentication?.accessToken);
+    if (response) {
+      if (response.type === "success") {
+        const { authentication } = response;
+        fetchUserInfo(authentication?.accessToken);
+      } else if (response.type === "error") {
+        Alert.alert("Google Auth Error", response.error?.message || "Something went wrong. Check your Google Console IDs.");
+        setLoading(false);
+      } else if (response.type === "cancel") {
+        setLoading(false);
+      }
     }
   }, [response]);
 
@@ -132,8 +134,11 @@ export default function PhoneScreen() {
 
       {/* Google Login Button */}
       <TouchableOpacity
-        style={styles.googleButton}
-        onPress={() => promptAsync()}
+        style={[styles.googleButton, (!request || loading) && { opacity: 0.6 }]}
+        onPress={() => {
+          setLoading(true);
+          promptAsync();
+        }}
         disabled={loading || !request}
         activeOpacity={0.8}
       >

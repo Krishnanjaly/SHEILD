@@ -23,10 +23,11 @@ const googleAuth = async (req, res) => {
       userData = results[0];
       console.log(`✅ Google user logged in: ${email}`);
     } else {
-      // Create new user (Google login is trusted)
+      // 🆕 Create new user (Google login is trusted)
+      // Including defaults for fields that might be mandatory in the schema
       const [insertResult] = await db.query(
-        "INSERT INTO users (name, email, notes) VALUES (?, ?, ?)",
-        [name, email, 'Registered via Google']
+        "INSERT INTO users (name, email, notes, age, blood_group, password, ai_enabled) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        [name, email, 'Registered via Google', 0, 'Unknown', 'google_auth_placeholder', 0]
       );
       
       const [newUser] = await db.query(
@@ -44,7 +45,7 @@ const googleAuth = async (req, res) => {
 
   } catch (error) {
     console.error("❌ Google Auth Error:", error);
-    res.status(500).json({ success: false, message: "Server error" });
+    res.status(500).json({ success: false, message: "Database error during Google login" });
   }
 };
 

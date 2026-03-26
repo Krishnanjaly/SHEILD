@@ -1,0 +1,51 @@
+﻿{
+  "id": "90d55b85-8635-4c89-ae14-9711affc0bc4",
+  "status": "ERRORED",
+  "platform": "ANDROID",
+  "error": {
+    "errorCode": "EAS_BUILD_UNKNOWN_GRADLE_ERROR",
+    "message": "Gradle build failed with unknown error. See logs for the \"Run gradlew\" phase for more information."
+  },
+  "artifacts": {},
+  "fingerprint": {
+    "id": "019d27d8-7d60-70a2-b662-b26755fb2e13",
+    "hash": "3c90cad9b986dd5401b023b0283e797559e2979c"
+  },
+  "initiatingActor": {
+    "id": "6b0003d1-7451-4cd8-8caa-8b670057949a",
+    "displayName": "krishnanjaly_s"
+  },
+  "logFiles": [
+    "https://job-logs.eascdn.net/production/90d55b85-8635-4c89-ae14-9711affc0bc4/1774490816432-8c94733c-974c-4de8-8773-5978e704f040.txt?X-Goog-Algorithm=GOOG4-RSA-SHA256&X-Goog-Credential=www-production%40exponentjs.iam.gserviceaccount.com%2F20260326%2Fauto%2Fstorage%2Fgoog4_request&X-Goog-Date=20260326T020800Z&X-Goog-Expires=900&X-Goog-SignedHeaders=host&X-Goog-Signature=853dccfc2023b41990dbc13a8fdcd674f55158a3bd2bf2e4177145bffa379137f431cd30c8a2dce9aa8e458d57f6fee609316242954e441ca949a50ba1ec4ec3a53d95f0da5369e42f090a6d3580dfd49f5f9caa9b7195d8378cd778e6425c5145ddbf6c52de167b44c04c7386088aac6cda2c9d3c86432e4dff6794adba0a64d5541d6ca42d0d1bbf55e60df759df2e3f7b4f90eee1435238821ae88af9ba756a74f8918e7d7078732c3ef627ef0ed8fe8c298e8ef052a7bb1ecce1a4203e3c25d304c4cc145762bfcdf5515d9e2de66cfc6e17c4dbabe580cb1ffcd1e1a309e02bd8641119643332cc729075d0182c22a2e08f91be3eec0e532f2bf0751bf6",
+    "https://job-logs.eascdn.net/production/90d55b85-8635-4c89-ae14-9711affc0bc4/1774490817558-2565bee7-2924-4982-b96d-15a9df75ba22.txt?X-Goog-Algorithm=GOOG4-RSA-SHA256&X-Goog-Credential=www-production%40exponentjs.iam.gserviceaccount.com%2F20260326%2Fauto%2Fstorage%2Fgoog4_request&X-Goog-Date=20260326T020800Z&X-Goog-Expires=900&X-Goog-SignedHeaders=host&X-Goog-Signature=662962211a5c73f68ab792b38094ca56ef4e5dfa8261a9453940b941be82d9dfb3bf35244f4f34a0d5e0625c609f89718bd3a6470abac968906e563e4274af95179f7cf196e134d7f3acf2724d5cf8762ec4b772d9467f2a8d86499c5f7c0df389261ba46e333911e84e6cdab08bdb172a3946f28c35c5beeb373c3d2fc45333eb6e7a0ff1e27deee0a74753949f58539229ed6f97e14644225a7a6a18eb4c3681028721b8d44a27cc2fd05a3fcadaf3cd46b9203155e6c405143c7054fcec32fb126fb406ad1920d05a0364842a593ff5a7c7429d370d084fe707db21ef36ce68972e6fd979293e699dd90b237e4312e83aeed3b44079a79c062541e600f6c4",
+    "https://job-logs.eascdn.net/production/90d55b85-8635-4c89-ae14-9711affc0bc4/1774490817760-430b623b-27c0-4239-a75f-33a8b45f8975.txt?X-Goog-Algorithm=GOOG4-RSA-SHA256&X-Goog-Credential=www-production%40exponentjs.iam.gserviceaccount.com%2F20260326%2Fauto%2Fstorage%2Fgoog4_request&X-Goog-Date=20260326T020800Z&X-Goog-Expires=900&X-Goog-SignedHeaders=host&X-Goog-Signature=87024b9781887f691d79288b4fec371d34f15226f3644ebbd1e20f95dd8a035dbaa1c26d827fb0ec6a920488979124941825476fd94e5e86fa719a00f742fe6534b0544eed307f4be4061a46f7facb8e60968e4ac8999a11a21863ee3bc62a24bbd38c5610fa70f98cee638cd46c030d0ba97fb520940d1b26ab38e55a9c71fee81b4a541ab4c2cb6161ba27924ebeeaf20ffe9cbb4e87b8a65f84d9e42fafb07790e18bcf0654e53d590bbfbc70e38bf7e331cc3a941359eadf4a205c005f2a2655cca9098518f33a59af05635eeac48866923f66f6476073a0a51b3b11e0f03c074add918138cd9c310befe201829a6ba545e951a22794928f1a53738458f8",
+    "https://job-logs.eascdn.net/production/90d55b85-8635-4c89-ae14-9711affc0bc4/1774490817936-d465d5eb-fd91-4f45-94ca-e1d5b78350e5.txt?X-Goog-Algorithm=GOOG4-RSA-SHA256&X-Goog-Credential=www-production%40exponentjs.iam.gserviceaccount.com%2F20260326%2Fauto%2Fstorage%2Fgoog4_request&X-Goog-Date=20260326T020800Z&X-Goog-Expires=900&X-Goog-SignedHeaders=host&X-Goog-Signature=520d67970ca4f4a7e735f770a7887082b9a90527a1252cec938201608d3228421949695e5b70cfb27e375449f4507cf556e216e93a0c1230ec4184189f4a67bedf1ceba1afe16ff0949c8b03b589f1747b616ba5023ca8a9e72910d3e002926506ae302761b2e9de6e1dfba5f422cdec224afb3f54b900fcc1b760df0539a78bd6e449861980ffe6bd4d89f07e3b71aa9cf2716b31a51f8de86e09945cc612c5309007c678471e4b3a814fd37da550dfb631dd94a6fd4c08c44e1f76608766e5de8c064293ac4fc557a90bdb2e25da75931ef6390289bc4aac2b335c4f56fb16a92e35b6a62639518c1d85626c0610496ef3f5a9c6ead6a440fac0a3b2fbc4fd"
+  ],
+  "project": {
+    "id": "66f74d52-01c7-4f19-a96d-8cc831cee2f4",
+    "name": "SHEILD",
+    "slug": "SHEILD",
+    "ownerAccount": {
+      "id": "a7d40387-cf85-451d-90ba-db77f823f314",
+      "name": "krishnanjaly_s"
+    }
+  },
+  "distribution": "INTERNAL",
+  "buildProfile": "preview",
+  "sdkVersion": "54.0.0",
+  "appVersion": "1.0.0",
+  "appBuildVersion": "1",
+  "gitCommitHash": "cf9a4727bd12eee35454e9f52acd8d830eb51484",
+  "gitCommitMessage": "Disable new architecture",
+  "priority": "NORMAL",
+  "createdAt": "2026-03-26T02:06:56.123Z",
+  "updatedAt": "2026-03-26T02:10:40.421Z",
+  "completedAt": "2026-03-26T02:10:39.370Z",
+  "expirationDate": "2026-04-09T02:06:56.155Z",
+  "isForIosSimulator": false,
+  "metrics": {
+    "buildWaitTime": 207,
+    "buildQueueTime": 38530,
+    "buildDuration": 184159
+  }
+}

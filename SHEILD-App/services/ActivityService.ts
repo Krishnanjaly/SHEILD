@@ -7,6 +7,11 @@ export interface Activity {
     emergency_id?: number | null;
     activity_type: string;
     timestamp: string;
+    // Optional UI fields
+    title?: string;
+    details?: string;
+    level?: string;
+    type?: string; 
 }
 
 export const ActivityService = {
@@ -53,6 +58,19 @@ export const ActivityService = {
         } catch (e) {
             console.error("Error fetching activities:", e);
             return [];
+        }
+    },
+
+    async clearActivities() {
+        try {
+            const email = await AsyncStorage.getItem("userEmail");
+            if (!email) return;
+            
+            // Backend endpoint for clearing logs if exists, otherwise logging local clear
+            console.log("Clearing activities for", email);
+            // Example: await fetch(`${BASE_URL}/activities/clear/${email}`, { method: 'DELETE' });
+        } catch (e) {
+            console.error("Error clearing activities:", e);
         }
     }
 };

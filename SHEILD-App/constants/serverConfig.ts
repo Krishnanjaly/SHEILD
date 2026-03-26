@@ -1,6 +1,6 @@
-// 🔧 Change this IP when you switch networks
-// Run `ipconfig` in PowerShell → find "IPv4 Address"
-const SERVER_IP = "192.168.220.8";
-const SERVER_PORT = "5000";
+// 🔧 Production Backend URL
+const SERVER_IP = "sheild-4puz.onrender.com";
+const SERVER_PORT = ""; // Render handles the port via https
 
-export const SERVER_URL = `http://${SERVER_IP}:${SERVER_PORT}`;
+export const SERVER_URL = `https://${SERVER_IP}`;
+

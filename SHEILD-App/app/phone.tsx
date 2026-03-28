@@ -151,6 +151,17 @@ export default function PhoneScreen() {
         )}
       </TouchableOpacity>
 
+      {/* Signup Link */}
+      <TouchableOpacity
+        onPress={() => router.push("/signup")}
+        style={styles.signupContainer}
+        disabled={loading}
+      >
+        <Text style={styles.signupText}>
+          New user? <Text style={styles.signupLink}>Create an account</Text>
+        </Text>
+      </TouchableOpacity>
+
       {/* Footer */}
       <Text style={styles.footerText}>
         By signing in, you agree to our{" "}
@@ -268,5 +279,17 @@ const styles = StyleSheet.create({
   secureText: {
     color: "#666",
     fontSize: 11,
+  },
+  signupContainer: {
+    marginTop: 20,
+    alignItems: "center",
+  },
+  signupText: {
+    color: "#888",
+    fontSize: 14,
+  },
+  signupLink: {
+    color: "#ec1313",
+    fontWeight: "bold",
   },
 });

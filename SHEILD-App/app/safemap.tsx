@@ -10,12 +10,12 @@ import { MaterialIcons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
 import { useEffect, useState, useRef } from "react";
 import * as Location from "expo-location";
-import MapView, { Marker } from "react-native-maps";
+import MapComponent, { Marker } from "../components/MapComponent";
 import { Share } from "react-native";
 
 export default function SafeMap() {
   const router = useRouter();
-  const mapRef = useRef<MapView | null>(null);
+  const mapRef = useRef<any>(null);
 
   const [location, setLocation] = useState<any>(null);
   const [loading, setLoading] = useState(true);
@@ -90,7 +90,7 @@ export default function SafeMap() {
             </View>
           ) : (
             location && (
-              <MapView
+              <MapComponent
                 ref={mapRef}
                 style={styles.map}
                 showsUserLocation={true}
@@ -108,7 +108,7 @@ export default function SafeMap() {
                   }}
                   title="You are here"
                 />
-              </MapView>
+              </MapComponent>
             )
           )}
 

@@ -1,4 +1,5 @@
 const db = require("../config/db");
+const bcrypt = require("bcryptjs");
 require("dotenv").config();
 
 // 🔹 GOOGLE AUTH
@@ -98,8 +99,112 @@ const getUser = async (req, res) => {
   }
 };
 
+// 🔹 REGISTER (Standard Username/Email/Pass)
+const register = async (req, res) => {
+  const { username, email, password } = req.body;
+
+  if (!username || !email || !password) {
+    return res.status(400).json({
+      success: false,
+      message: "Missing username, email, or password",
+    });
+  }
+
+  try {
+    // Check if user already exists (username or email)
+    const [existing] = await db.query(
+      "SELECT * FROM users WHERE email = ? OR username = ?",
+      [email, username]
+    );
+
+    if (existing.length > 0) {
+      const field = existing[0].email === email ? "Email" : "Username";
+      return res.status(400).json({
+        success: false,
+        message: `${field} already exists.`,
+      });
+    }
+
+    // Hash the password
+    const salt = await bcrypt.genSalt(10);
+    const hashedPassword = await bcrypt.hash(password, salt);
+
+    // Insert into DB
+    const [result] = await db.query(
+      "INSERT INTO users (username, name, email, password) VALUES (?, ?, ?, ?)",
+      [username, username, email, hashedPassword]
+    );
+
+    res.status(201).json({
+      success: true,
+      user: {
+        id: result.insertId,
+        username,
+        email,
+      },
+      message: "User registered successfully!",
+    });
+  } catch (error) {
+    console.error("❌ Register Error:", error);
+    res.status(500).json({ success: false, message: "Internal server error" });
+  }
+};
+
+// 🔹 LOGIN (Standard Identifier/Pass)
+const login = async (req, res) => {
+  const { identifier, password } = req.body;
+
+  if (!identifier || !password) {
+    return res.status(400).json({
+      success: false,
+      message: "Missing identifier or password",
+    });
+  }
+
+  try {
+    // Find user by username or email
+    const [users] = await db.query(
+      "SELECT * FROM users WHERE email = ? OR username = ?",
+      [identifier, identifier]
+    );
+
+    if (users.length === 0) {
+      return res.status(401).json({
+        success: false,
+        message: "Invalid credentials.",
+      });
+    }
+
+    const user = users[0];
+
+    // Check password
+    const isMatch = await bcrypt.compare(password, user.password);
+    if (!isMatch) {
+      return res.status(401).json({
+        success: false,
+        message: "Invalid credentials.",
+      });
+    }
+
+    res.json({
+      success: true,
+      user: {
+        id: user.id,
+        name: user.name || user.username,
+        email: user.email,
+        username: user.username,
+      },
+    });
+  } catch (error) {
+    console.error("❌ Login Error:", error);
+    res.status(500).json({ success: false, message: "Internal server error" });
+  }
+};
+
 module.exports = {
   googleAuth,
   registerUser,
   getUser,
+  register,
+  login,
 };

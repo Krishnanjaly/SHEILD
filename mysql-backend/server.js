@@ -1,12 +1,10 @@
-import aiRoutes from "./routes/ai.js";
-import dotenv from "dotenv";
-dotenv.config();
-
 const express = require("express");
 const cors = require("cors");
 const path = require("path");
 const fs = require("fs");
 require("dotenv").config();
+
+const aiRoutes = require("./routes/ai.js");
 
 const app = express();
 const PORT = process.env.PORT || 5000;

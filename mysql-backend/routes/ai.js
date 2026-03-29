@@ -1,5 +1,5 @@
-import express from "express";
-import fetch from "node-fetch";
+const express = require("express");
+const axios = require("axios");
 
 const router = express.Router();
 
@@ -7,24 +7,23 @@ router.post("/analyze", async (req, res) => {
     try {
         const { text } = req.body;
 
-        const response = await fetch(
+        const response = await axios.post(
             "https://api-inference.huggingface.co/models/facebook/bart-large-mnli",
             {
-                method: "POST",
+                inputs: text,
+                parameters: {
+                    candidate_labels: ["emergency", "normal"],
+                },
+            },
+            {
                 headers: {
                     Authorization: `Bearer ${process.env.HF_TOKEN}`,
                     "Content-Type": "application/json",
                 },
-                body: JSON.stringify({
-                    inputs: text,
-                    parameters: {
-                        candidate_labels: ["emergency", "normal"],
-                    },
-                }),
             }
         );
 
-        const data = await response.json();
+        const data = response.data;
 
         const label = data.labels[0];
         const score = data.scores[0];
@@ -42,7 +41,7 @@ router.post("/analyze", async (req, res) => {
         });
 
     } catch (err) {
-        console.log(err);
+        console.log(err.response ? err.response.data : err.message);
         res.status(500).json({
             success: false,
             message: "AI error",
@@ -50,4 +49,4 @@ router.post("/analyze", async (req, res) => {
     }
 });
 
-export default router;
+module.exports = router;

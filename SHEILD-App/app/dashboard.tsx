@@ -382,6 +382,8 @@ export default function Dashboard() {
           email,
           latitude: lat,
           longitude: lon,
+          keyword: "MANUAL SOS",
+          risk_level: "HIGH",
         }),
       });
 

@@ -75,6 +75,7 @@ export default function EmergencyMonitor() {
     const [aiRiskTriggers, setAiRiskTriggers] = useState<string[]>([]);
     const [aiConfidence, setAiConfidence] = useState<number>(0);
     const [showAiRiskAlert, setShowAiRiskAlert] = useState(false);
+    const [showAiAnalyzingPopup, setShowAiAnalyzingPopup] = useState(false);
     const [isEmergencyActive, setIsEmergencyActive] = useState(false);
     
     // AI Sensor Data Storage
@@ -199,6 +200,27 @@ export default function EmergencyMonitor() {
         }, 700);
     }, []);
 
+    const bindVoiceRuntimeHandlers = useCallback(() => {
+        voiceRuntime.onSpeechResults = onSpeechResults;
+        voiceRuntime.onSpeechPartialResults = onSpeechResults;
+        voiceRuntime.onSpeechEnd = () => {
+            if (isEmergencyListeningWindowActive()) {
+                scheduleVoiceRestart('speech ended');
+            }
+        };
+        voiceRuntime.onSpeechError = (e) => {
+            console.log('Speech Error:', e);
+            if (isEmergencyListeningWindowActive()) {
+                scheduleVoiceRestart(`speech error: ${JSON.stringify(e)}`);
+                return;
+            }
+
+            DeviceEventEmitter.emit("EMERGENCY_LISTENING_CANCEL");
+            listeningRef.current = false;
+            setIsListening(false);
+        };
+    }, [scheduleVoiceRestart]);
+
 
     const startGuardianService = async () => {
         await GuardianStateService.ensureBackgroundGuardianForLoggedInUser();
@@ -308,6 +330,19 @@ export default function EmergencyMonitor() {
         };
     }, []);
 
+    useEffect(() => {
+        const interval = setInterval(() => {
+            const shouldShow =
+                aiRiskEngine.isAnalysisActive() &&
+                !showLowWarning &&
+                !showHighWarning &&
+                !showCamera;
+            setShowAiAnalyzingPopup(shouldShow);
+        }, 800);
+
+        return () => clearInterval(interval);
+    }, [showLowWarning, showHighWarning, showCamera]);
+
     const setup = async () => {
         const id = await AsyncStorage.getItem("userId");
         setUserId(id);
@@ -336,26 +371,7 @@ export default function EmergencyMonitor() {
 
         // Voice listeners
         if (isVoiceModuleAvailable()) {
-            voiceRuntime.onSpeechResults = onSpeechResults;
-            voiceRuntime.onSpeechPartialResults = onSpeechResults;
-            voiceRuntime.onSpeechEnd = () => {
-                if (isEmergencyListeningWindowActive()) {
-                    scheduleVoiceRestart('speech ended');
-                }
-            };
-            voiceRuntime.onSpeechError = (e) => {
-                console.log('Speech Error:', e);
-                if (isEmergencyListeningWindowActive()) {
-                    scheduleVoiceRestart(`speech error: ${JSON.stringify(e)}`);
-                    return;
-                }
-
-                DeviceEventEmitter.emit("EMERGENCY_LISTENING_CANCEL");
-                safeVoiceDestroy().finally(() => {
-                    listeningRef.current = false;
-                    setIsListening(false);
-                });
-            };
+            bindVoiceRuntimeHandlers();
         } else {
             console.log("Voice native module unavailable. Emergency voice listening is disabled until the app is rebuilt.");
         }
@@ -497,11 +513,20 @@ export default function EmergencyMonitor() {
                 return;
             }
 
+            bindVoiceRuntimeHandlers();
             listeningRef.current = true;
             setIsListening(true);
             listeningWindowEndsAtRef.current = Date.now() + VOICE_LISTENING_WINDOW_MS;
             DeviceEventEmitter.emit("EMERGENCY_LISTENING_START");
-            const voiceStart = await safeVoiceStart('en-US');
+            const contextualStrings = Array.from(
+                new Set([...keywordsRef.current.low, ...keywordsRef.current.high])
+            );
+            const voiceStart = await safeVoiceStart('en-US', {
+                contextualStrings,
+                interimResults: true,
+                continuous: true,
+                maxAlternatives: 5,
+            });
             if (!voiceStart.ok) {
                 throw new Error(voiceStart.reason);
             }
@@ -558,7 +583,6 @@ export default function EmergencyMonitor() {
             setIsListening(false);
             DeviceEventEmitter.emit("EMERGENCY_LISTENING_STOP");
             await safeVoiceCancel();
-            await safeVoiceDestroy();
         } catch (e) {
             console.log("Stop Listening Error:", e);
         }
@@ -886,7 +910,7 @@ export default function EmergencyMonitor() {
         // Stop voice detection
         console.log("🎤 Stopping voice detection...");
         try {
-            await safeVoiceDestroy();
+            await safeVoiceCancel();
             listeningRef.current = false;
             setIsListening(false);
         } catch (e) {
@@ -1567,6 +1591,13 @@ export default function EmergencyMonitor() {
                 </View>
             )}
 
+            {showAiAnalyzingPopup && (
+                <View style={styles.aiAnalyzingPopup}>
+                    <View style={styles.aiAnalyzingDot} />
+                    <Text style={styles.aiAnalyzingText}>AI is analyzing...</Text>
+                </View>
+            )}
+
             {/* ───── LOW RISK WARNING MODAL ───── */}
             <Modal visible={showLowWarning} transparent animationType="fade">
                 <View style={styles.modalOverlay}>
@@ -1867,6 +1898,34 @@ const styles = StyleSheet.create({
         color: '#fff',
         fontSize: 12,
         fontWeight: 'bold',
+    },
+    aiAnalyzingPopup: {
+        position: 'absolute',
+        top: 165,
+        left: 20,
+        right: 20,
+        backgroundColor: 'rgba(17, 24, 39, 0.92)',
+        borderWidth: 1,
+        borderColor: 'rgba(34, 197, 94, 0.35)',
+        paddingVertical: 12,
+        paddingHorizontal: 14,
+        borderRadius: 14,
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 10,
+        zIndex: 9997,
+        elevation: 98,
+    },
+    aiAnalyzingDot: {
+        width: 10,
+        height: 10,
+        borderRadius: 5,
+        backgroundColor: '#22c55e',
+    },
+    aiAnalyzingText: {
+        color: '#e5e7eb',
+        fontSize: 13,
+        fontWeight: '700',
     },
     modalOverlay: {
         flex: 1,

@@ -23,6 +23,31 @@ export function isVoiceModuleAvailable() {
   return Boolean(ExpoSpeechRecognitionModule);
 }
 
+function getPreferredAndroidRecognitionService() {
+  if (Platform.OS !== "android" || !isVoiceModuleAvailable()) {
+    return undefined;
+  }
+
+  try {
+    const services = ExpoSpeechRecognitionModule.getSpeechRecognitionServices();
+    if (!Array.isArray(services) || services.length === 0) {
+      return undefined;
+    }
+
+    if (services.includes("com.google.android.as")) {
+      return "com.google.android.as";
+    }
+
+    if (services.includes("com.google.android.googlequicksearchbox")) {
+      return "com.google.android.googlequicksearchbox";
+    }
+
+    return services[0];
+  } catch {
+    return undefined;
+  }
+}
+
 export async function ensureVoicePermission() {
   if (Platform.OS === "android") {
     const currentStatus = await PermissionsAndroid.check(
@@ -80,12 +105,21 @@ export async function safeVoiceStart(
       };
     }
 
+    try {
+      ExpoSpeechRecognitionModule.abort();
+    } catch {}
+
+    const androidRecognitionServicePackage =
+      options.androidRecognitionServicePackage ??
+      getPreferredAndroidRecognitionService();
+
     ExpoSpeechRecognitionModule.start({
       lang: locale,
       interimResults: true,
       continuous: true,
       maxAlternatives: 5,
       addsPunctuation: false,
+      androidRecognitionServicePackage,
       ...options,
     });
     return {

@@ -27,10 +27,12 @@ export default function QRPage() {
     const [contactsCount, setContactsCount] = useState(0);
     const [qrUrl, setQrUrl] = useState<string | null>(null);
     const [isSetupComplete, setIsSetupComplete] = useState(false);
+    const [qrError, setQrError] = useState<string | null>(null);
 
     const loadData = useCallback(async (isRegenerating = false) => {
         if (!isRegenerating) setLoading(true);
         try {
+            setQrError(null);
             const storedId = await AsyncStorage.getItem("userId");
             const storedEmail = await AsyncStorage.getItem("userEmail");
             
@@ -70,12 +72,16 @@ export default function QRPage() {
                     const qrData = await qrRes.json();
                     setQrUrl(qrData.qrUrl);
                 } else {
+                    const qrData = await qrRes.json().catch(() => null);
+                    setQrUrl(null);
+                    setQrError(qrData?.message || "Failed to generate QR link.");
                     console.error("Failed to fetch QR, status:", qrRes.status);
-                    // Still mark setup as complete so the page shows, but handle error
                 }
             }
         } catch (error) {
             console.error("QR Load Error:", error);
+            setQrUrl(null);
+            setQrError("Could not prepare QR. Please check your connection.");
             Alert.alert("Error", "Could not prepare QR. Please check your connection.");
         } finally {
             setLoading(false);
@@ -184,6 +190,14 @@ export default function QRPage() {
                                 backgroundColor="transparent"
                             />
                         )}
+                        {!qrUrl && (
+                            <View style={styles.qrMissingState}>
+                                <MaterialIcons name="qr-code-2" size={52} color="#666" />
+                                <Text style={styles.qrMissingText}>
+                                    {qrError || "QR link is not available yet."}
+                                </Text>
+                            </View>
+                        )}
                     </View>
                     <Text style={styles.scanHint}>Scan to send emergency alert</Text>
                 </View>
@@ -288,6 +302,24 @@ const styles = StyleSheet.create({
         borderRadius: 20,
         borderWidth: 1,
         borderColor: "rgba(255,255,255,0.1)",
+        minWidth: width * 0.65,
+        minHeight: width * 0.65,
+        alignItems: "center",
+        justifyContent: "center",
+    },
+    qrMissingState: {
+        width: width * 0.55,
+        minHeight: width * 0.55,
+        alignItems: "center",
+        justifyContent: "center",
+        gap: 12,
+        paddingHorizontal: 16,
+    },
+    qrMissingText: {
+        color: "#888",
+        fontSize: 13,
+        textAlign: "center",
+        lineHeight: 18,
     },
     scanHint: {
         color: "#aaa",
@@ -391,4 +423,4 @@ const styles = StyleSheet.create({
         fontSize: 12,
         lineHeight: 18,
     },
-});
+});

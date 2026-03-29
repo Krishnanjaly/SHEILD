@@ -13,6 +13,7 @@ import { useRouter } from "expo-router";
 import { MaterialIcons } from "@expo/vector-icons";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import BASE_URL from "../config/api";
+import { GuardianStateService } from "../services/GuardianStateService";
 
 export default function PhoneScreen() {
   const router = useRouter();
@@ -66,6 +67,7 @@ export default function PhoneScreen() {
         await AsyncStorage.setItem("userId", data.user.id.toString());
         await AsyncStorage.setItem("userName", data.user.name || "");
         await AsyncStorage.setItem("userEmail", data.user.email || "");
+        await GuardianStateService.ensureBackgroundGuardianForLoggedInUser();
 
         router.replace("/dashboard");
       } else {

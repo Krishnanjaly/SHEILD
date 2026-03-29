@@ -336,14 +336,18 @@ class AiRiskEngine {
             } else {
                 console.log("🟢 AI says safe, ignoring");
 
-                return {
+                const safeAnalysis = {
                     ...analysis,
                     riskLevel: "NONE",
                     confidence: 0
                 } as RiskAnalysis;
+
+                this.notifySubscribers(safeAnalysis);
+                return safeAnalysis;
             }
         }
 
+        this.notifySubscribers(analysis);
         return analysis;
     }
 
@@ -399,6 +403,9 @@ class AiRiskEngine {
 
     public subscribe(callback: (analysis: RiskAnalysis) => void) {
         this.subscribers.push(callback);
+        return () => {
+            this.subscribers = this.subscribers.filter(cb => cb !== callback);
+        };
     }
 
     private notifySubscribers(analysis: RiskAnalysis) {

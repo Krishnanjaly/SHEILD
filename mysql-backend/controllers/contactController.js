@@ -62,24 +62,28 @@ const deleteContact = async (req, res) => {
 const addTrustedContact = async (req, res) => {
   const { user_id, trusted_name, trusted_no, email, relationship_type, latitude, longitude } = req.body;
   try {
+    if (!user_id || !trusted_name || !trusted_no || !email || !relationship_type) {
+      return res.status(400).json({ success: false, message: "Missing required trusted contact fields" });
+    }
+
     await db.query(
-      "INSERT INTO Trusted_Contact (user_id, trusted_name, trusted_no, email, relationship_type, latitude, longitude) VALUES (?, ?, ?, ?, ?, ?, ?)",
+      "INSERT INTO trusted_contact (user_id, trusted_name, trusted_no, email, relationship_type, latitude, longitude) VALUES (?, ?, ?, ?, ?, ?, ?)",
       [user_id, trusted_name, trusted_no, email, relationship_type, latitude, longitude]
     );
     res.json({ success: true });
   } catch (err) {
-    console.error(err);
-    res.json({ success: false });
+    console.error("Add trusted contact error:", err);
+    res.status(500).json({ success: false, message: err.message });
   }
 };
 
 const getTrustedContacts = async (req, res) => {
   const { user_id } = req.params;
   try {
-    const [result] = await db.query("SELECT * FROM Trusted_Contact WHERE user_id = ?", [user_id]);
+    const [result] = await db.query("SELECT * FROM trusted_contact WHERE user_id = ?", [user_id]);
     res.json(result);
   } catch (err) {
-    console.error(err);
+    console.error("Get trusted contacts error:", err);
     res.json([]);
   }
 };
@@ -87,14 +91,18 @@ const getTrustedContacts = async (req, res) => {
 const updateTrustedContact = async (req, res) => {
   const { trusted_id, trusted_name, trusted_no, email, relationship_type, latitude, longitude } = req.body;
   try {
+    if (!trusted_id) {
+      return res.status(400).json({ success: false, message: "trusted_id is required" });
+    }
+
     await db.query(
-      "UPDATE Trusted_Contact SET trusted_name = ?, trusted_no = ?, email = ?, relationship_type = ?, latitude = ?, longitude = ? WHERE trusted_id = ?",
+      "UPDATE trusted_contact SET trusted_name = ?, trusted_no = ?, email = ?, relationship_type = ?, latitude = ?, longitude = ? WHERE trusted_id = ?",
       [trusted_name, trusted_no, email, relationship_type, latitude, longitude, trusted_id]
     );
     res.json({ success: true });
   } catch (err) {
-    console.error(err);
-    res.json({ success: false });
+    console.error("Update trusted contact error:", err);
+    res.status(500).json({ success: false, message: err.message });
   }
 };
 

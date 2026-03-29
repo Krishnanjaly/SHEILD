@@ -25,6 +25,7 @@ import { aiRiskEngine, RiskAnalysis } from "../utils/AiRiskEngine";
 import { ActivityService, Activity } from "../services/ActivityService";
 import { EmergencyService } from "../services/EmergencyService";
 import { GuardianServiceManager } from "../services/GuardianServiceManager";
+import { GuardianStateService } from "../services/GuardianStateService";
 import {
   ensureVoicePermission,
   isVoiceModuleAvailable,
@@ -178,9 +179,7 @@ export default function Dashboard() {
     
     if (newState) {
       console.log('🛡️ Starting AI Guardian Service...');
-      await GuardianServiceManager.start();
-      await AsyncStorage.setItem('GUARDIAN_ENABLED', 'true');
-      aiRiskEngine.startMonitoring();
+      await GuardianStateService.ensureBackgroundGuardianForLoggedInUser();
       
       // Request battery optimization ignore
       if (Platform.OS === 'android') {
@@ -192,9 +191,7 @@ export default function Dashboard() {
       }
     } else {
       console.log('🛑 Stopping AI Guardian Service...');
-      await GuardianServiceManager.stop();
-      await AsyncStorage.setItem('GUARDIAN_ENABLED', 'false');
-      aiRiskEngine.stopMonitoring();
+      await GuardianStateService.disableGuardianState();
     }
     
     DeviceEventEmitter.emit('STATUS_TOGGLE_CHANGED');

@@ -13,6 +13,11 @@ import { useRouter } from "expo-router";
 import { useEffect, useState } from "react";
 import { aiRiskEngine, RiskAnalysis, SensorData } from "../utils/AiRiskEngine";
 import { ActivityService } from "../services/ActivityService";
+import {
+    GuardianMonitoringStatus,
+    GuardianSnapshot,
+    GuardianStateService,
+} from "../services/GuardianStateService";
 
 
 export default function Guardian() {
@@ -20,21 +25,45 @@ export default function Guardian() {
     const [analysis, setAnalysis] = useState<RiskAnalysis | null>(null);
     const [isMonitoring, setIsMonitoring] = useState(false);
     const [isFullAnalysis, setIsFullAnalysis] = useState(false);
+    const [monitoringStatus, setMonitoringStatus] = useState<GuardianMonitoringStatus>("OFF");
 
     useEffect(() => {
-        // Initial state
-        aiRiskEngine.performRiskAnalysis().then(setAnalysis);
-        setIsMonitoring(aiRiskEngine.isMonitoringActive());
+        const loadSnapshot = async () => {
+            const snapshot = await GuardianStateService.getSnapshot();
+            setAnalysis(snapshot.analysis);
+            setMonitoringStatus(snapshot.monitoringStatus);
+            setIsMonitoring(snapshot.monitoringStatus !== "OFF");
+            setIsFullAnalysis(
+                snapshot.monitoringStatus === "ACTIVE" || snapshot.monitoringStatus === "EMERGENCY"
+            );
+        };
+        loadSnapshot();
 
-        // Listen for engine updates
-        // Since subscribe doesn't return unsubscribe, we'll just handle it if possible
-        // or just rely on the event emitter for this specific page
-        aiRiskEngine.subscribe(setAnalysis);
+        const unsubscribe = aiRiskEngine.subscribe(async (nextAnalysis) => {
+            setAnalysis(nextAnalysis);
+            const snapshot = await GuardianStateService.getSnapshot();
+            setMonitoringStatus(snapshot.monitoringStatus);
+            setIsMonitoring(snapshot.monitoringStatus !== "OFF");
+            setIsFullAnalysis(
+                snapshot.monitoringStatus === "ACTIVE" || snapshot.monitoringStatus === "EMERGENCY"
+            );
+        });
 
         // Event listener for real-time detections
         const sub = DeviceEventEmitter.addListener("AI_RISK_DETECTED", (data: RiskAnalysis) => {
             setAnalysis(data);
         });
+        const snapshotSub = DeviceEventEmitter.addListener(
+            "GUARDIAN_SNAPSHOT_UPDATED",
+            (snapshot: GuardianSnapshot) => {
+                setAnalysis(snapshot.analysis);
+                setMonitoringStatus(snapshot.monitoringStatus);
+                setIsMonitoring(snapshot.monitoringStatus !== "OFF");
+                setIsFullAnalysis(
+                    snapshot.monitoringStatus === "ACTIVE" || snapshot.monitoringStatus === "EMERGENCY"
+                );
+            }
+        );
 
         // Check monitoring state periodically
         const interval = setInterval(() => {
@@ -44,6 +73,8 @@ export default function Guardian() {
 
         return () => {
             sub.remove();
+            snapshotSub.remove();
+            unsubscribe?.();
             clearInterval(interval);
         };
     }, []);
@@ -51,6 +82,22 @@ export default function Guardian() {
     const riskLevel = analysis?.riskLevel || 'NONE';
     const confidence = analysis ? Math.round(analysis.confidence * 100) : 0;
     const triggers = analysis?.triggers || [];
+    const monitorTitle =
+        monitoringStatus === "EMERGENCY"
+            ? "Emergency Risk Detected"
+            : monitoringStatus === "ACTIVE"
+              ? "Enhanced Analysis Active"
+              : monitoringStatus === "PASSIVE"
+                ? "Passive Guard Active"
+                : "AI Monitoring Paused";
+    const monitorSubtitle =
+        monitoringStatus === "EMERGENCY"
+            ? "Guardian detected a live threat and escalated monitoring"
+            : monitoringStatus === "ACTIVE"
+              ? "Analyzing sensors and microphone in real time"
+              : monitoringStatus === "PASSIVE"
+                ? "Background guardian is running for this logged-in account"
+                : "Sign in and keep sensors enabled to monitor in background";
 
     return (
         <View style={styles.container}>
@@ -95,23 +142,19 @@ export default function Guardian() {
                     </View>
 
                     <Text style={styles.monitorTitle}>
-                        {isMonitoring 
-                            ? (isFullAnalysis ? "Enhanced Analysis Active" : "Passive Guard Active") 
-                            : "AI Monitoring Paused"}
+                        {monitorTitle}
                     </Text>
                     <Text style={styles.monitorSubtitle}>
-                        {isMonitoring 
-                            ? (isFullAnalysis ? "Analyzing all sensors & microphones" : "Waiting for suspicious movement") 
-                            : "Sensors are currently offline"}
+                        {monitorSubtitle}
                     </Text>
                 </View>
 
                 {/* Indicators */}
                 <View style={styles.card}>
-                    <Indicator label="Microphone" status={isMonitoring ? "Active" : "Off"} active={isMonitoring} />
-                    <Indicator label="Live Location" status="Broadcasting" active />
+                    <Indicator label="Microphone" status={isFullAnalysis ? "Active" : isMonitoring ? "Armed" : "Off"} active={isMonitoring} />
+                    <Indicator label="Live Location" status={isMonitoring ? "Ready" : "Off"} active={isMonitoring} />
                     <Indicator label="Motion Sensors" status={isMonitoring ? "Streaming" : "Standby"} active={isMonitoring} />
-                    <Indicator label="Pattern Recognition" status={isMonitoring ? "Learning" : "Paused"} active={isMonitoring} />
+                    <Indicator label="Pattern Recognition" status={monitoringStatus === "EMERGENCY" ? "Escalated" : isMonitoring ? "Learning" : "Paused"} active={isMonitoring} />
                 </View>
 
                 {/* Threat Section */}
@@ -186,6 +229,7 @@ export default function Guardian() {
                         onPress={async () => {
                             console.log('🤖 Manual Full Analysis Activation');
                             await aiRiskEngine.startFullAnalysis();
+                            await GuardianStateService.saveMonitoringStatus("ACTIVE");
                             setIsFullAnalysis(true);
                             
                              ActivityService.logActivity('Manual Enhanced Monitoring: User explicitly started Full AI analysis mode');

@@ -1,32 +1,12 @@
 import React, { useEffect } from "react";
-import { LogBox, Platform, BackHandler } from "react-native";
-import ReactNativeForegroundService from "@supersami/rn-foreground-service";
+import { BackHandler, LogBox } from "react-native";
 import * as SplashScreen from "expo-splash-screen";
 import { Stack } from "expo-router";
 import EmergencyMonitor from "../components/EmergencyMonitor";
-import { backgroundMonitoringTask } from "../services/BackgroundTask";
+import { GuardianStateService } from "../services/GuardianStateService";
 
-// Keep splash screen visible (optional)
 SplashScreen.preventAutoHideAsync();
 
-ReactNativeForegroundService.register({
-  config: {
-    alert: false,
-    onServiceErrorCallBack: function () {
-      console.warn("Foreground service error");
-    },
-  },
-});
-
-// Register background task
-ReactNativeForegroundService.add_task(backgroundMonitoringTask, {
-  delay: 1000,
-  onLoop: true,
-  taskId: "shield_monitor_task",
-  onError: (e) => console.log(`Error in SHIELD task:`, e),
-});
-
-// Ignore expo-av warning
 LogBox.ignoreLogs(["[expo-av]: Expo AV has been deprecated"]);
 
 const originalWarn = console.warn;
@@ -42,32 +22,13 @@ console.warn = (...args: any[]) => {
 
 export default function Layout() {
   useEffect(() => {
-    // Hide splash immediately (no font loading needed)
     SplashScreen.hideAsync();
   }, []);
 
   useEffect(() => {
-    // Start foreground service
-    try {
-      ReactNativeForegroundService.start({
-        id: 114,
-        title: "SHIELD Guardian Active",
-        message: "Monitoring for emergencies",
-        icon: "ic_launcher",
-        button: false,
-        button2: false,
-        setOnlyAlertOnce: "true",
-        color: "#ec1313",
-        ServiceType:
-          Platform.OS === "android"
-            ? "location|microphone|camera|foregroundService"
-            : "microphone",
-      } as any);
-
-      console.log("✅ SHIELD Guardian Foreground Service Started");
-    } catch (e) {
-      console.log("Foreground Service errored: ", e);
-    }
+    GuardianStateService.ensureBackgroundGuardianForLoggedInUser().catch((e) => {
+      console.log("Guardian auto-start error:", e);
+    });
 
     const backHandler = BackHandler.addEventListener(
       "hardwareBackPress",

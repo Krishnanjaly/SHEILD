@@ -11,6 +11,7 @@ import { useState } from "react";
 import { useRouter, useLocalSearchParams } from "expo-router";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import BASE_URL from "../config/api";
+import { GuardianStateService } from "../services/GuardianStateService";
 
 
 export default function OtpScreen() {
@@ -69,6 +70,7 @@ export default function OtpScreen() {
             userData.id.toString()
           );
           console.log("Stored userId:", userData.id);
+          await GuardianStateService.ensureBackgroundGuardianForLoggedInUser();
         } else {
           console.log("User not found after OTP");
         }

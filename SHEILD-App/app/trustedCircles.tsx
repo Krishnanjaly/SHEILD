@@ -143,7 +143,7 @@ export default function TrustedCircles() {
                 setEditingId(null);
                 loadContacts();
             } else {
-                Alert.alert("Database Error", "Failed to save contact");
+                Alert.alert("Database Error", data.message || "Failed to save contact");
             }
         } catch (error) {
             Alert.alert("Error", "Could not connect to server");

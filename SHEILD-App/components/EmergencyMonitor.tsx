@@ -1,11 +1,11 @@
 import React, { useEffect, useState, useRef, useCallback } from 'react';
+import { useSpeechRecognitionEvent } from 'expo-speech-recognition';
 import {
     View, Alert, DeviceEventEmitter, Platform, PermissionsAndroid,
     Modal, Text, TouchableOpacity, StyleSheet, AppState, AppStateStatus,
     NativeModules, NativeEventEmitter, BackHandler
 } from 'react-native';
 import { VolumeManager } from 'react-native-volume-manager';
-import Voice from '@react-native-voice/voice';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Location from 'expo-location';
 import { Audio } from 'expo-av';
@@ -15,21 +15,23 @@ import haversine from 'haversine';
 import BASE_URL from '../config/api';
 import * as IntentLauncher from 'expo-intent-launcher';
 import { MaterialIcons } from '@expo/vector-icons';
-import ReactNativeForegroundService from '@supersami/rn-foreground-service';
 import { LinearGradient } from 'expo-linear-gradient';
 import { foregroundCallService } from '../services/ForegroundCallService';
 import { aiRiskEngine, RiskAnalysis, SensorData } from '../utils/AiRiskEngine';
 import { ActivityService } from '../services/ActivityService';
 import { EmergencyService } from '../services/EmergencyService';
 import { GuardianServiceManager } from '../services/GuardianServiceManager';
+import { GuardianStateService } from '../services/GuardianStateService';
 import * as SMS from 'expo-sms';
 import { registerGuardianTask } from '../utils/GuardianTask';
+import { findMatchedKeyword } from '../services/keywordMatcher';
 import {
     ensureVoicePermission,
     isVoiceModuleAvailable,
     safeVoiceCancel,
     safeVoiceDestroy,
     safeVoiceStart,
+    voiceRuntime,
 } from '../services/voiceModule';
 
 // AI Risk Detection Thresholds
@@ -42,8 +44,14 @@ const SCORE_REPEATED_SHAKING = 4;
 const SCORE_FALL_DETECTION = 5;
 const SCORE_DARKNESS_DETECTED = 2;
 const SCORE_HIGH_SOUND_INTENSITY = 3;
+const VOICE_LISTENING_WINDOW_MS = 30000;
 
 const Device = { osBuildId: "mock-device-id" };
+const ReactNativeForegroundService = {
+    update: (_options: unknown) => {
+        // Foreground service integration removed for EAS compatibility.
+    },
+};
 
 export default function EmergencyMonitor() {
     const [isListening, setIsListening] = useState(false);
@@ -110,6 +118,29 @@ export default function EmergencyMonitor() {
     const [showActiveCallCountdown, setShowActiveCallCountdown] = useState(false);
     const [activeCallCountdown, setActiveCallCountdown] = useState(15);
 
+    useSpeechRecognitionEvent("result", (event) => {
+        const transcripts =
+            event.results?.map((result) => result.transcript).filter(Boolean) || [];
+        if (transcripts.length === 0) {
+            return;
+        }
+
+        const syntheticEvent = { value: transcripts };
+        if (event.isFinal) {
+            voiceRuntime.onSpeechResults?.(syntheticEvent);
+        } else {
+            voiceRuntime.onSpeechPartialResults?.(syntheticEvent);
+        }
+    });
+
+    useSpeechRecognitionEvent("end", () => {
+        voiceRuntime.onSpeechEnd?.();
+    });
+
+    useSpeechRecognitionEvent("error", (event) => {
+        voiceRuntime.onSpeechError?.(event);
+    });
+
     // PERSISTENT GUARDIAN STATE
     const [isGuardianEnabled, setIsGuardianEnabled] = useState(false);
     const [guardianStatus, setGuardianStatus] = useState<'PASSIVE' | 'ACTIVE' | 'EMERGENCY'>('PASSIVE');
@@ -152,7 +183,15 @@ export default function EmergencyMonitor() {
             }
 
             console.log(`🎤 Restarting speech recognition during emergency window: ${reason}`);
-            const voiceStart = await safeVoiceStart('en-US');
+            const contextualStrings = Array.from(
+                new Set([...keywordsRef.current.low, ...keywordsRef.current.high])
+            );
+            const voiceStart = await safeVoiceStart('en-US', {
+                contextualStrings,
+                interimResults: true,
+                continuous: true,
+                maxAlternatives: 5,
+            });
             if (!voiceStart.ok && isEmergencyListeningWindowActive()) {
                 console.log('Voice restart failed:', voiceStart.reason);
                 scheduleVoiceRestart(`retry after failure: ${voiceStart.reason}`);
@@ -162,25 +201,23 @@ export default function EmergencyMonitor() {
 
 
     const startGuardianService = async () => {
-        await GuardianServiceManager.start();
-        await AsyncStorage.setItem('GUARDIAN_ENABLED', 'true');
-        aiRiskEngine.startMonitoring();
+        await GuardianStateService.ensureBackgroundGuardianForLoggedInUser();
         setIsGuardianEnabled(true);
+        setGuardianStatus(aiRiskEngine.isAnalysisActive() ? 'ACTIVE' : 'PASSIVE');
     };
 
     const stopGuardianService = async () => {
-        await GuardianServiceManager.stop();
-        await AsyncStorage.setItem('GUARDIAN_ENABLED', 'false');
-        aiRiskEngine.stopMonitoring();
+        await GuardianStateService.disableGuardianState();
         setIsGuardianEnabled(false);
+        setGuardianStatus('PASSIVE');
     };
 
     useEffect(() => {
         const loadGuardianState = async () => {
-            const enabled = await AsyncStorage.getItem('GUARDIAN_ENABLED');
-            if (enabled === 'true') {
+            const enabled = await GuardianStateService.ensureBackgroundGuardianForLoggedInUser();
+            if (enabled) {
                 setIsGuardianEnabled(true);
-                startGuardianService();
+                setGuardianStatus(aiRiskEngine.isAnalysisActive() ? 'ACTIVE' : 'PASSIVE');
             }
         };
         loadGuardianState();
@@ -199,8 +236,13 @@ export default function EmergencyMonitor() {
             setAiRiskLevel(analysis.riskLevel);
             setAiConfidence(analysis.confidence);
             setAiRiskTriggers(analysis.triggers);
+            GuardianStateService.saveAnalysis(
+                analysis,
+                analysis.riskLevel === 'NONE' ? 'PASSIVE' : undefined
+            ).catch(() => {});
             
-            if (analysis.riskLevel === 'HIGH') setGuardianStatus('ACTIVE');
+            if (analysis.riskLevel === 'HIGH') setGuardianStatus('EMERGENCY');
+            else if (analysis.riskLevel === 'LOW') setGuardianStatus('ACTIVE');
             else if (isEmergencyActive) setGuardianStatus('EMERGENCY');
             else setGuardianStatus('PASSIVE');
         });
@@ -253,6 +295,8 @@ export default function EmergencyMonitor() {
         });
 
         return () => {
+            autoSub.remove();
+            riskSub.remove();
             cancelSub.remove();
             toggleSub.remove();
             aiRiskSub.remove();
@@ -267,7 +311,10 @@ export default function EmergencyMonitor() {
     const setup = async () => {
         const id = await AsyncStorage.getItem("userId");
         setUserId(id);
-        if (id) await fetchKeywords(id);
+        if (id) {
+            await fetchKeywords(id);
+            await GuardianStateService.ensureBackgroundGuardianForLoggedInUser();
+        }
 
         // Check for pending emergency from background monitoring
         try {
@@ -289,14 +336,14 @@ export default function EmergencyMonitor() {
 
         // Voice listeners
         if (isVoiceModuleAvailable()) {
-            Voice.onSpeechResults = onSpeechResults;
-            Voice.onSpeechPartialResults = onSpeechResults;
-            Voice.onSpeechEnd = () => {
+            voiceRuntime.onSpeechResults = onSpeechResults;
+            voiceRuntime.onSpeechPartialResults = onSpeechResults;
+            voiceRuntime.onSpeechEnd = () => {
                 if (isEmergencyListeningWindowActive()) {
                     scheduleVoiceRestart('speech ended');
                 }
             };
-            Voice.onSpeechError = (e) => {
+            voiceRuntime.onSpeechError = (e) => {
                 console.log('Speech Error:', e);
                 if (isEmergencyListeningWindowActive()) {
                     scheduleVoiceRestart(`speech error: ${JSON.stringify(e)}`);
@@ -320,8 +367,12 @@ export default function EmergencyMonitor() {
 
         if (snsEnabled === "false") {
             aiRiskEngine.stopMonitoring();
+            await GuardianStateService.saveMonitoringStatus('OFF');
         } else {
             startAiRiskDetection();
+            await GuardianStateService.saveMonitoringStatus(
+                aiRiskEngine.isAnalysisActive() ? 'ACTIVE' : 'PASSIVE'
+            );
         }
 
         checkBatteryOptimization();
@@ -448,7 +499,7 @@ export default function EmergencyMonitor() {
 
             listeningRef.current = true;
             setIsListening(true);
-            listeningWindowEndsAtRef.current = Date.now() + 30000;
+            listeningWindowEndsAtRef.current = Date.now() + VOICE_LISTENING_WINDOW_MS;
             DeviceEventEmitter.emit("EMERGENCY_LISTENING_START");
             const voiceStart = await safeVoiceStart('en-US');
             if (!voiceStart.ok) {
@@ -458,7 +509,7 @@ export default function EmergencyMonitor() {
             if (listeningTimeoutRef.current) clearTimeout(listeningTimeoutRef.current);
             listeningTimeoutRef.current = setTimeout(() => {
                 if (listeningRef.current) stopListening();
-            }, 30000);
+            }, VOICE_LISTENING_WINDOW_MS);
 
         } catch (e: any) {
             console.error("Voice Error: ", e);
@@ -473,30 +524,20 @@ export default function EmergencyMonitor() {
         if (!results || results.length === 0) return;
         console.log("Detecting speech:", results);
 
-        const highMatch = results.find(res =>
-            keywordsRef.current.high.some(kw => {
-                const found = res.toLowerCase().includes(kw);
-                if (found) triggeredKeywordRef.current = kw; // Store the actual keyword matched
-                return found;
-            })
-        );
+        const highMatch = findMatchedKeyword(results, keywordsRef.current.high);
 
         if (highMatch) {
+            triggeredKeywordRef.current = highMatch;
             ActivityService.logActivity(`KEYWORD_DETECTED_HIGH: ${triggeredKeywordRef.current}`, currentEmergencyId);
             handleHighRisk();
             stopListening();
             return;
         }
 
-        const lowMatch = results.find(res =>
-            keywordsRef.current.low.some(kw => {
-                const found = res.toLowerCase().includes(kw);
-                if (found) triggeredKeywordRef.current = kw;
-                return found;
-            })
-        );
+        const lowMatch = findMatchedKeyword(results, keywordsRef.current.low);
 
         if (lowMatch) {
+            triggeredKeywordRef.current = lowMatch;
             ActivityService.logActivity(`KEYWORD_DETECTED_LOW: ${triggeredKeywordRef.current}`, currentEmergencyId);
             handleLowRisk();
             stopListening();

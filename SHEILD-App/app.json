@@ -50,8 +50,16 @@
       "favicon": "./assets/images/favicon.png"
     },
     "plugins": [
-      "./plugins/withVectorIconsAndroid",
+      "./plugins/withAndroidxAppComponentFactory",
       "expo-router",
+      [
+        "expo-speech-recognition",
+        {
+          "microphonePermission": "Allow SHIELD to access the microphone for emergency keyword detection.",
+          "speechRecognitionPermission": "Allow SHIELD to use speech recognition for emergency keyword detection.",
+          "androidSpeechServicePackages": ["com.google.android.googlequicksearchbox"]
+        }
+      ],
       [
         "expo-splash-screen",
         {
@@ -75,26 +83,19 @@
         }
       ],
       "expo-mail-composer",
-      [
-        "@react-native-voice/voice",
-        {
-          "microphonePermission": "Allow SHIELD to access the microphone for emergency keywords.",
-          "speechRecognitionPermission": "Allow SHIELD to securely recognize emergency voice commands."
-        }
-      ],
       "expo-web-browser",
       "expo-asset"
     ],
     "experiments": {
       "typedRoutes": true,
-      "reactCompiler": true,
-      "reactNativeNewArchitecture": true
+      "reactCompiler": true
     },
     "extra": {
       "router": {},
       "eas": {
-        "projectId": "66f74d52-01c7-4f19-a96d-8cc831cee2f4"
+        "projectId": "ed39da28-0aff-4f3f-8fb8-b4037403c745"
       }
-    }
+    },
+    "owner": "krishnanjalys-organization"
   }
 }

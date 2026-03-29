@@ -1,45 +1,61 @@
-import { NativeModules, PermissionsAndroid, Platform } from "react-native";
-import Voice from "@react-native-voice/voice";
+import { PermissionsAndroid, Platform } from "react-native";
+import {
+  ExpoSpeechRecognitionModule,
+  ExpoSpeechRecognitionOptions,
+} from "expo-speech-recognition";
 
-const VOICE_START_METHOD = "startSpeech";
+type SpeechResultsEvent = { value?: string[] };
+type SpeechErrorEvent = unknown;
+
+export const voiceRuntime: {
+  onSpeechResults?: ((event: SpeechResultsEvent) => void) | null;
+  onSpeechPartialResults?: ((event: SpeechResultsEvent) => void) | null;
+  onSpeechEnd?: (() => void) | null;
+  onSpeechError?: ((event: SpeechErrorEvent) => void) | null;
+} = {
+  onSpeechResults: null,
+  onSpeechPartialResults: null,
+  onSpeechEnd: null,
+  onSpeechError: null,
+};
 
 export function isVoiceModuleAvailable() {
-  const nativeVoiceModule = NativeModules.Voice;
-  return Boolean(
-    Voice &&
-      nativeVoiceModule &&
-      typeof nativeVoiceModule[VOICE_START_METHOD] === "function"
-  );
+  return Boolean(ExpoSpeechRecognitionModule);
 }
 
 export async function ensureVoicePermission() {
-  if (Platform.OS !== "android") {
-    return true;
-  }
+  if (Platform.OS === "android") {
+    const currentStatus = await PermissionsAndroid.check(
+      PermissionsAndroid.PERMISSIONS.RECORD_AUDIO
+    );
 
-  const currentStatus = await PermissionsAndroid.check(
-    PermissionsAndroid.PERMISSIONS.RECORD_AUDIO
-  );
+    if (!currentStatus) {
+      const granted = await PermissionsAndroid.request(
+        PermissionsAndroid.PERMISSIONS.RECORD_AUDIO,
+        {
+          title: "Microphone permission required",
+          message:
+            "SHIELD needs microphone access to detect emergency voice commands.",
+          buttonPositive: "Allow",
+          buttonNegative: "Deny",
+        }
+      );
 
-  if (currentStatus) {
-    return true;
-  }
-
-  const granted = await PermissionsAndroid.request(
-    PermissionsAndroid.PERMISSIONS.RECORD_AUDIO,
-    {
-      title: "Microphone permission required",
-      message:
-        "SHIELD needs microphone access to detect emergency voice commands.",
-      buttonPositive: "Allow",
-      buttonNegative: "Deny",
+      if (granted !== PermissionsAndroid.RESULTS.GRANTED) {
+        return false;
+      }
     }
-  );
+  }
 
-  return granted === PermissionsAndroid.RESULTS.GRANTED;
+  const permissionResponse =
+    await ExpoSpeechRecognitionModule.requestPermissionsAsync();
+  return permissionResponse.granted;
 }
 
-export async function safeVoiceStart(locale = "en-US") {
+export async function safeVoiceStart(
+  locale = "en-US",
+  options: Partial<ExpoSpeechRecognitionOptions> = {}
+) {
   if (!isVoiceModuleAvailable()) {
     return {
       ok: false,
@@ -57,27 +73,28 @@ export async function safeVoiceStart(locale = "en-US") {
   }
 
   try {
-    const available = await Voice.isAvailable();
-    if (!available) {
+    if (!ExpoSpeechRecognitionModule.isRecognitionAvailable()) {
       return {
         ok: false,
-        reason: "No speech recognition service is available on this device.",
+        reason: "Speech recognition service is not available on this device.",
       };
     }
-  } catch (error) {
-    return {
-      ok: false,
-      reason: `Voice availability check failed: ${String(error)}`,
-    };
-  }
 
-  try {
-    await Voice.start(locale);
-    return { ok: true };
+    ExpoSpeechRecognitionModule.start({
+      lang: locale,
+      interimResults: true,
+      continuous: true,
+      maxAlternatives: 5,
+      addsPunctuation: false,
+      ...options,
+    });
+    return {
+      ok: true,
+    };
   } catch (error) {
     return {
       ok: false,
-      reason: `Voice.start failed: ${String(error)}`,
+      reason: `Speech recognition start failed: ${String(error)}`,
     };
   }
 }
@@ -88,7 +105,7 @@ export async function safeVoiceStop() {
   }
 
   try {
-    await Voice.stop();
+    ExpoSpeechRecognitionModule.stop();
   } catch {}
 }
 
@@ -98,20 +115,13 @@ export async function safeVoiceCancel() {
   }
 
   try {
-    await Voice.cancel();
+    ExpoSpeechRecognitionModule.abort();
   } catch {}
 }
 
 export async function safeVoiceDestroy() {
-  if (!isVoiceModuleAvailable()) {
-    return;
-  }
-
-  try {
-    await Voice.destroy();
-  } catch {}
-
-  try {
-    Voice.removeAllListeners();
-  } catch {}
+  voiceRuntime.onSpeechResults = null;
+  voiceRuntime.onSpeechPartialResults = null;
+  voiceRuntime.onSpeechEnd = null;
+  voiceRuntime.onSpeechError = null;
 }

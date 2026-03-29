@@ -1,10 +1,11 @@
-import Voice from "@react-native-voice/voice";
 import { triggerLowRisk, triggerHighRisk } from "./emergencyActions";
 import {
     isVoiceModuleAvailable,
     safeVoiceStart,
     safeVoiceStop,
+    voiceRuntime,
 } from "./voiceModule";
+import { findMatchedKeyword, normalizeSpeechText } from "./keywordMatcher";
 
 const lowRiskKeywords = ["call me", "come later"];
 const highRiskKeywords = ["help", "danger", "save me"];
@@ -21,20 +22,20 @@ export const stopVoiceListening = async () => {
 };
 
 if (isVoiceModuleAvailable()) {
-    Voice.onSpeechResults = (event) => {
+    voiceRuntime.onSpeechResults = (event) => {
         if (!event.value || event.value.length === 0) {
             return;
         }
 
-        const spokenText = event.value[0].toLowerCase();
+        const spokenText = normalizeSpeechText(event.value.join(" "));
 
         console.log("Heard:", spokenText);
 
-        if (lowRiskKeywords.some(word => spokenText.includes(word))) {
+        if (findMatchedKeyword([spokenText], lowRiskKeywords)) {
             triggerLowRisk();
         }
 
-        if (highRiskKeywords.some(word => spokenText.includes(word))) {
+        if (findMatchedKeyword([spokenText], highRiskKeywords)) {
             triggerHighRisk();
         }
     };

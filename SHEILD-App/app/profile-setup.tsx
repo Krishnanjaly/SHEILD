@@ -16,6 +16,7 @@ import { useRouter } from "expo-router";
 import { MaterialIcons } from "@expo/vector-icons";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import BASE_URL from "../config/api";
+import { GuardianStateService } from "../services/GuardianStateService";
 
 export default function ProfileSetup() {
   const router = useRouter();
@@ -76,6 +77,7 @@ export default function ProfileSetup() {
 
       if (response.ok && data.success) {
         await AsyncStorage.setItem("isLoggedIn", "true");
+        await GuardianStateService.ensureBackgroundGuardianForLoggedInUser();
         Alert.alert("Success", "Account created successfully!");
         router.replace("/dashboard");
       } else {

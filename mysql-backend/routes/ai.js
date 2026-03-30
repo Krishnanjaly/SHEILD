@@ -8,7 +8,7 @@ router.post("/analyze", async (req, res) => {
         const { text } = req.body;
 
         const response = await axios.post(
-            "https://api-inference.huggingface.co/models/facebook/bart-large-mnli",
+            "https://router.huggingface.co/models/facebook/bart-large-mnli",
             {
                 inputs: text,
                 parameters: {

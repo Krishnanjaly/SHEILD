@@ -5,7 +5,10 @@ web-build/
 android/app/build/
 android/app/.cxx/
 android/build/
-android/.gradle/
+android/.gradle
+android/.gradle/**/*
+**/.gradle/
+**/.gradle/**/*
 android/.kotlin/
 ios/build/
 *.apk

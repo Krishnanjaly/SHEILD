@@ -17,6 +17,7 @@ import * as IntentLauncher from 'expo-intent-launcher';
 import { MaterialIcons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import AiAnalysisPopup from './AiAnalysisPopup';
+import AbnormalMovementPopup from './AbnormalMovementPopup';
 import { foregroundCallService } from '../services/ForegroundCallService';
 import { aiRiskEngine, MovementDetectionEvent, RiskAnalysis, SensorData } from '../utils/AiRiskEngine';
 import { ActivityService } from '../services/ActivityService';
@@ -26,7 +27,10 @@ import { GuardianStateService } from '../services/GuardianStateService';
 import * as SMS from 'expo-sms';
 import { registerGuardianTask } from '../utils/GuardianTask';
 import { findMatchedKeyword } from '../services/keywordMatcher';
+import { classifyAbnormalMovement } from '../services/abnormalMovementClassifier';
+import { abnormalMovementEmergencyService } from '../services/abnormalMovementEmergencyService';
 import {
+    classifyVoiceError,
     ensureVoicePermission,
     isVoiceModuleAvailable,
     safeVoiceCancel,
@@ -45,7 +49,12 @@ const SCORE_REPEATED_SHAKING = 4;
 const SCORE_FALL_DETECTION = 5;
 const SCORE_DARKNESS_DETECTED = 2;
 const SCORE_HIGH_SOUND_INTENSITY = 3;
-const VOICE_LISTENING_WINDOW_MS = 30000;
+const VOICE_LISTENING_WINDOW_MS = 15000;
+const VOICE_RESTART_DELAY_MS = 2500;
+const MAX_VOICE_RESTART_ATTEMPTS = 6;
+const DEFAULT_LOW_RISK_KEYWORDS = ["call me", "come later", "emergency"];
+const DEFAULT_HIGH_RISK_KEYWORDS = ["help", "danger", "save me", "help help"];
+const AI_CLASSIFICATION_POPUP_MS = 1800;
 
 const Device = { osBuildId: "mock-device-id" };
 const ReactNativeForegroundService = {
@@ -67,6 +76,8 @@ export default function EmergencyMonitor() {
     const volumeHistory = useRef<number[]>([]);
     const listeningTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const voiceRestartTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const voiceRestartAttemptsRef = useRef(0);
+    const movementPopupTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const cancelTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const timerIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
     const analysisProgressIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -83,6 +94,12 @@ export default function EmergencyMonitor() {
     const [analysisProgress, setAnalysisProgress] = useState(0);
     const [analysisStatusText, setAnalysisStatusText] = useState("Idle");
     const [isEmergencyActive, setIsEmergencyActive] = useState(false);
+    const [abnormalMovementPopup, setAbnormalMovementPopup] = useState<{
+        visible: boolean;
+        classification: 'LOW' | 'HIGH';
+        title: string;
+        message: string;
+    } | null>(null);
     
     // AI Sensor Data Storage
     const sensorHistory = useRef<SensorData[]>([]);
@@ -161,6 +178,113 @@ export default function EmergencyMonitor() {
     const callCountdownRef = useRef<ReturnType<typeof setInterval> | null>(null);
     const listeningWindowEndsAtRef = useRef<number | null>(null);
 
+    const applyKeywordLists = useCallback((lowList: string[], highList: string[]) => {
+        setLowRiskKeywords(lowList);
+        setHighRiskKeywords(highList);
+        keywordsRef.current = { low: lowList, high: highList };
+        console.log('Keywords loaded:', keywordsRef.current);
+    }, []);
+
+    const ensureKeywordFallbacks = useCallback(() => {
+        const lowList =
+            keywordsRef.current.low.length > 0 ? keywordsRef.current.low : DEFAULT_LOW_RISK_KEYWORDS;
+        const highList =
+            keywordsRef.current.high.length > 0 ? keywordsRef.current.high : DEFAULT_HIGH_RISK_KEYWORDS;
+
+        applyKeywordLists([...lowList], [...highList]);
+    }, [applyKeywordLists]);
+
+    const showAbnormalMovementDetectionPopup = useCallback((
+        classification: 'LOW' | 'HIGH',
+        title: string,
+        message: string
+    ) => {
+        if (movementPopupTimeoutRef.current) {
+            clearTimeout(movementPopupTimeoutRef.current);
+        }
+
+        setAbnormalMovementPopup({
+            visible: true,
+            classification,
+            title,
+            message,
+        });
+
+        movementPopupTimeoutRef.current = setTimeout(() => {
+            setAbnormalMovementPopup((current) => current ? { ...current, visible: false } : current);
+            movementPopupTimeoutRef.current = null;
+        }, 3500);
+    }, []);
+
+    const waitForClassificationPopup = useCallback(async () => {
+        await new Promise((resolve) => setTimeout(resolve, AI_CLASSIFICATION_POPUP_MS));
+    }, []);
+
+    const processAbnormalMovementDetection = useCallback(async (
+        analysis: RiskAnalysis
+    ) => {
+        const assessment = classifyAbnormalMovement(analysis);
+        if (assessment.classification === 'NONE') {
+            return;
+        }
+
+        showAbnormalMovementDetectionPopup(
+            assessment.classification,
+            assessment.title,
+            assessment.message
+        );
+        await waitForClassificationPopup();
+
+        if (assessment.classification === 'HIGH') {
+            const response = await abnormalMovementEmergencyService.handleHighRiskDetection(
+                assessment,
+                getLocationString
+            );
+
+            if (response.duplicate) {
+                return;
+            }
+
+            if (response.emergencyId) {
+                setCurrentEmergencyId(response.emergencyId);
+            }
+
+            triggeredKeywordRef.current =
+                analysis.triggers.length > 0
+                    ? `Abnormal movement: ${analysis.triggers.join(', ')}`
+                    : 'Abnormal movement detected';
+
+            triggerHighRiskAiAlert({
+                ...analysis,
+                riskLevel: 'HIGH',
+            });
+            return;
+        }
+
+        const response = await abnormalMovementEmergencyService.handleLowRiskDetection(
+            assessment,
+            getLocationString
+        );
+
+        if (response.duplicate) {
+            return;
+        }
+
+        if (response.emergencyId) {
+            setCurrentEmergencyId(response.emergencyId);
+        }
+
+        triggeredKeywordRef.current =
+            analysis.triggers.length > 0
+                ? `Abnormal movement: ${analysis.triggers.join(', ')}`
+                : 'Abnormal movement detected';
+
+        triggerLowRiskAiAlert({
+            ...analysis,
+            riskLevel: 'LOW',
+        });
+    }, [showAbnormalMovementDetectionPopup, waitForClassificationPopup]);
+
     const clearVoiceRestartTimer = () => {
         if (voiceRestartTimeoutRef.current) {
             clearTimeout(voiceRestartTimeoutRef.current);
@@ -171,6 +295,8 @@ export default function EmergencyMonitor() {
     const isEmergencyListeningWindowActive = () => {
         return (
             listeningRef.current &&
+            appStateRef.current === 'active' &&
+            !backgroundServiceRef.current &&
             listeningWindowEndsAtRef.current !== null &&
             Date.now() < listeningWindowEndsAtRef.current
         );
@@ -182,14 +308,21 @@ export default function EmergencyMonitor() {
             return;
         }
 
+        if (voiceRestartAttemptsRef.current >= MAX_VOICE_RESTART_ATTEMPTS) {
+            console.log(`Voice restart limit reached during emergency listening: ${reason}`);
+            stopListening();
+            return;
+        }
+
         clearVoiceRestartTimer();
+        voiceRestartAttemptsRef.current += 1;
         voiceRestartTimeoutRef.current = setTimeout(async () => {
             if (!isEmergencyListeningWindowActive()) {
                 await stopListening();
                 return;
             }
 
-            console.log(`🎤 Restarting speech recognition during emergency window: ${reason}`);
+            console.log(`Restarting speech recognition during emergency window (${voiceRestartAttemptsRef.current}/${MAX_VOICE_RESTART_ATTEMPTS}): ${reason}`);
             const contextualStrings = Array.from(
                 new Set([...keywordsRef.current.low, ...keywordsRef.current.high])
             );
@@ -198,17 +331,22 @@ export default function EmergencyMonitor() {
                 interimResults: true,
                 continuous: true,
                 maxAlternatives: 5,
-            });
+            }, 'emergency');
             if (!voiceStart.ok && isEmergencyListeningWindowActive()) {
                 console.log('Voice restart failed:', voiceStart.reason);
                 scheduleVoiceRestart(`retry after failure: ${voiceStart.reason}`);
+                return;
             }
-        }, 700);
+            voiceRestartAttemptsRef.current = 0;
+        }, VOICE_RESTART_DELAY_MS);
     }, []);
 
     const bindVoiceRuntimeHandlers = useCallback(() => {
         voiceRuntime.onSpeechResults = onSpeechResults;
-        voiceRuntime.onSpeechPartialResults = onSpeechResults;
+        voiceRuntime.onSpeechPartialResults = (event) => {
+            voiceRestartAttemptsRef.current = 0;
+            onSpeechResults(event);
+        };
         voiceRuntime.onSpeechEnd = () => {
             if (isEmergencyListeningWindowActive()) {
                 scheduleVoiceRestart('speech ended');
@@ -217,7 +355,11 @@ export default function EmergencyMonitor() {
         voiceRuntime.onSpeechError = (e) => {
             console.log('Speech Error:', e);
             if (isEmergencyListeningWindowActive()) {
-                scheduleVoiceRestart(`speech error: ${JSON.stringify(e)}`);
+                const errorKind = classifyVoiceError(e);
+                if (errorKind === 'aborted') {
+                    console.log('Speech recognition aborted during emergency listening. Delaying restart.');
+                }
+                scheduleVoiceRestart(`speech error: ${errorKind}`);
                 return;
             }
 
@@ -295,13 +437,15 @@ export default function EmergencyMonitor() {
             if (isEmergencyActive) return;
             console.log('📡 Received Background AI Risk:', analysis.riskLevel);
             if (analysis.riskLevel === 'HIGH') {
-                triggerHighRiskAiAlert(analysis);
+                processAbnormalMovementDetection(analysis).catch((error) => {
+                    console.log('Background abnormal movement handling error:', error);
+                });
             }
         });
 
         const forceAiSub = DeviceEventEmitter.addListener("FORCE_AI_EMERGENCY", () => {
             console.log('🚨 Manually Forced AI Emergency');
-            triggerHighRiskAiAlert({
+            processAbnormalMovementDetection({
                 riskLevel: 'HIGH',
                 confidence: 1.0,
                 triggers: ['User Forced Emergency'],
@@ -311,6 +455,8 @@ export default function EmergencyMonitor() {
                     light: 0,
                     timestamp: Date.now()
                 }
+            }).catch((error) => {
+                console.log('Forced abnormal movement handling error:', error);
             });
         });
 
@@ -345,6 +491,10 @@ export default function EmergencyMonitor() {
             safeVoiceDestroy().catch(() => {});
             clearVoiceRestartTimer();
             clearAiAnalysisProgress();
+            if (movementPopupTimeoutRef.current) {
+                clearTimeout(movementPopupTimeoutRef.current);
+                movementPopupTimeoutRef.current = null;
+            }
         };
     }, []);
 
@@ -441,11 +591,9 @@ export default function EmergencyMonitor() {
                 });
 
                 if (!isEmergencyActive && !showHighWarning && !showLowWarning && !isCancelledRef.current) {
-                    if (analysis.riskLevel === 'HIGH') {
-                        triggerHighRiskAiAlert(analysis);
-                    } else if (analysis.riskLevel === 'LOW') {
-                        triggerLowRiskAiAlert(analysis);
-                    }
+                    processAbnormalMovementDetection(analysis).catch((error) => {
+                        console.log('Movement detection handling error:', error);
+                    });
                 }
             }
         }, 250);
@@ -531,11 +679,9 @@ export default function EmergencyMonitor() {
                     const analysis = JSON.parse(pendingEmergency);
                     await AsyncStorage.removeItem('pendingEmergency');
                     
-                    if (analysis.riskLevel === 'HIGH') {
-                        triggerHighRiskAiAlert(analysis);
-                    } else if (analysis.riskLevel === 'LOW') {
-                        triggerLowRiskAiAlert(analysis);
-                    }
+                    processAbnormalMovementDetection(analysis).catch((error) => {
+                        console.log('Foreground abnormal movement handling error:', error);
+                    });
                 }
             } catch (e) {
                 console.log('Error checking pending emergency:', e);
@@ -545,6 +691,9 @@ export default function EmergencyMonitor() {
             console.log('🔴 App went to background - using background monitoring service');
             setIsBackgroundMode(true);
             backgroundServiceRef.current = true;
+            if (listeningRef.current) {
+                await stopListening();
+            }
             updateForegroundServiceNotification();
         }
         
@@ -602,12 +751,18 @@ export default function EmergencyMonitor() {
                 }
             }
 
-            setLowRiskKeywords(lowList);
-            setHighRiskKeywords(highList);
-            keywordsRef.current = { low: lowList, high: highList };
-            console.log('Keywords loaded:', keywordsRef.current);
+            if (lowList.length === 0) {
+                lowList = lowRiskKeywords.length > 0 ? lowRiskKeywords : DEFAULT_LOW_RISK_KEYWORDS;
+            }
+
+            if (highList.length === 0) {
+                highList = highRiskKeywords.length > 0 ? highRiskKeywords : DEFAULT_HIGH_RISK_KEYWORDS;
+            }
+
+            applyKeywordLists(lowList, highList);
         } catch (error) {
             console.log('Error fetching keywords:', error);
+            ensureKeywordFallbacks();
         }
     };
 
@@ -626,6 +781,8 @@ export default function EmergencyMonitor() {
                 await fetchKeywords(activeUserId);
             }
 
+            ensureKeywordFallbacks();
+
             const micEnabled = await AsyncStorage.getItem("MIC_ENABLED");
             if (micEnabled === "false") {
                 console.log("🚫 Mic is disabled by user. Skipping Voice start.");
@@ -643,24 +800,34 @@ export default function EmergencyMonitor() {
                 return;
             }
 
+            // 🔑 CRITICAL: Pause AI engine audio recording to free the mic for speech recognition
+            // On Android, Audio.Recording and SpeechRecognition can't share the microphone
+            console.log("🎤 Pausing AI audio metering to free mic for speech recognition...");
+            await aiRiskEngine.pauseAudioRecording();
+
             bindVoiceRuntimeHandlers();
             listeningRef.current = true;
             setIsListening(true);
+            voiceRestartAttemptsRef.current = 0;
             listeningWindowEndsAtRef.current = Date.now() + VOICE_LISTENING_WINDOW_MS;
             DeviceEventEmitter.emit("EMERGENCY_LISTENING_START");
             const contextualStrings = Array.from(
                 new Set([...keywordsRef.current.low, ...keywordsRef.current.high])
             );
-            console.log('Emergency listening keywords:', contextualStrings);
+            console.log('🗣️ Emergency listening keywords:', contextualStrings);
+            console.log('🗣️ HIGH risk keywords:', keywordsRef.current.high);
+            console.log('🗣️ LOW risk keywords:', keywordsRef.current.low);
             const voiceStart = await safeVoiceStart('en-US', {
                 contextualStrings,
                 interimResults: true,
                 continuous: true,
                 maxAlternatives: 5,
-            });
+            }, 'emergency');
             if (!voiceStart.ok) {
                 throw new Error(voiceStart.reason);
             }
+
+            console.log('✅ Speech recognition started successfully — listening for keywords...');
 
             if (listeningTimeoutRef.current) clearTimeout(listeningTimeoutRef.current);
             listeningTimeoutRef.current = setTimeout(() => {
@@ -672,17 +839,24 @@ export default function EmergencyMonitor() {
             listeningRef.current = false;
             setIsListening(false);
             DeviceEventEmitter.emit("EMERGENCY_LISTENING_STOP");
+            // Resume audio recording since speech recognition failed
+            aiRiskEngine.resumeAudioRecording().catch(() => {});
         }
     };
 
     const onSpeechResults = (e: any) => {
         const results = e.value as string[];
         if (!results || results.length === 0) return;
-        console.log("Detecting speech:", results);
+        const candidates = Array.from(new Set([...results, results.join(" ")]));
+        voiceRestartAttemptsRef.current = 0;
+        console.log("🎙️ Speech detected:", results);
+        console.log("🔍 Checking against HIGH keywords:", keywordsRef.current.high);
+        console.log("🔍 Checking against LOW keywords:", keywordsRef.current.low);
 
-        const highMatch = findMatchedKeyword(results, keywordsRef.current.high);
+        const highMatch = findMatchedKeyword(candidates, keywordsRef.current.high);
 
         if (highMatch) {
+            console.log("🚨 HIGH RISK KEYWORD MATCHED:", highMatch);
             triggeredKeywordRef.current = highMatch;
             ActivityService.logActivity(`KEYWORD_DETECTED_HIGH: ${triggeredKeywordRef.current}`, currentEmergencyId);
             handleHighRisk();
@@ -690,9 +864,10 @@ export default function EmergencyMonitor() {
             return;
         }
 
-        const lowMatch = findMatchedKeyword(results, keywordsRef.current.low);
+        const lowMatch = findMatchedKeyword(candidates, keywordsRef.current.low);
 
         if (lowMatch) {
+            console.log("⚠️ LOW RISK KEYWORD MATCHED:", lowMatch);
             triggeredKeywordRef.current = lowMatch;
             ActivityService.logActivity(`KEYWORD_DETECTED_LOW: ${triggeredKeywordRef.current}`, currentEmergencyId);
             handleLowRisk();
@@ -701,7 +876,7 @@ export default function EmergencyMonitor() {
         }
     };
 
-    const stopListening = async () => {
+    const stopListening = async (options?: { resumeAiAudio?: boolean }) => {
         if (!listeningRef.current) return;
         try {
             if (listeningTimeoutRef.current) {
@@ -709,11 +884,17 @@ export default function EmergencyMonitor() {
                 listeningTimeoutRef.current = null;
             }
             clearVoiceRestartTimer();
+            voiceRestartAttemptsRef.current = 0;
             listeningWindowEndsAtRef.current = null;
             listeningRef.current = false;
             setIsListening(false);
             DeviceEventEmitter.emit("EMERGENCY_LISTENING_STOP");
             await safeVoiceCancel();
+
+            if (options?.resumeAiAudio !== false) {
+                console.log("🔊 Resuming AI audio metering after speech recognition stopped");
+                await aiRiskEngine.resumeAudioRecording();
+            }
         } catch (e) {
             console.log("Stop Listening Error:", e);
         }
@@ -1168,11 +1349,9 @@ export default function EmergencyMonitor() {
             }
 
             if (!isEmergencyActive && !showHighWarning && !showLowWarning && !isCancelledRef.current) {
-                if (analysis.riskLevel === 'HIGH') {
-                    triggerHighRiskAiAlert(analysis);
-                } else if (analysis.riskLevel === 'LOW') {
-                    triggerLowRiskAiAlert(analysis);
-                }
+                processAbnormalMovementDetection(analysis).catch((error) => {
+                    console.log('Pending abnormal movement handling error:', error);
+                });
             }
         });
     };
@@ -1321,15 +1500,22 @@ export default function EmergencyMonitor() {
     const startEmergencyWorkflow = async () => {
         console.log('🚨 Starting Emergency Workflow...');
         
-        const storedUserId = await AsyncStorage.getItem("userId");
-        if (storedUserId) {
-            const locStr = await getLocationString();
-            const startRes = await EmergencyService.startEmergency(storedUserId, triggeredKeywordRef.current, locStr);
-            if (startRes.success) {
-                setCurrentEmergencyId(startRes.emergency_id);
-                await EmergencyService.logAlert(startRes.emergency_id, 'email');
-                await ActivityService.logActivity("SOS_TRIGGERED_AI", startRes.emergency_id);
+        let emergencyId = currentEmergencyId;
+        if (!emergencyId) {
+            const storedUserId = await AsyncStorage.getItem("userId");
+            if (storedUserId) {
+                const locStr = await getLocationString();
+                const startRes = await EmergencyService.startEmergency(storedUserId, triggeredKeywordRef.current, locStr);
+                if (startRes.success) {
+                    emergencyId = startRes.emergency_id;
+                    setCurrentEmergencyId(startRes.emergency_id);
+                    await EmergencyService.logAlert(startRes.emergency_id, 'email');
+                }
             }
+        }
+
+        if (emergencyId) {
+            await ActivityService.logActivity("SOS_TRIGGERED_AI", emergencyId);
         }
 
         // Start high risk recording
@@ -1340,6 +1526,10 @@ export default function EmergencyMonitor() {
     };
     const startHighRiskRecording = async () => {
         console.log("📹 Starting high risk video + audio recording...");
+
+        if (listeningRef.current) {
+            await stopListening({ resumeAiAudio: false });
+        }
 
         // Request all permissions
         if (!cameraPermission?.granted) {
@@ -1750,6 +1940,21 @@ export default function EmergencyMonitor() {
                 statusText={analysisStatusText}
                 onCancel={cancelAiDetection}
             />
+            {abnormalMovementPopup && (
+                <AbnormalMovementPopup
+                    visible={abnormalMovementPopup.visible}
+                    classification={abnormalMovementPopup.classification}
+                    title={abnormalMovementPopup.title}
+                    message={abnormalMovementPopup.message}
+                />
+            )}
+
+            {isEmergencyActive && (
+                <View style={styles.emergencyModeBanner}>
+                    <MaterialIcons name="warning" size={16} color="#fff" />
+                    <Text style={styles.emergencyModeBannerText}>Emergency Mode Active</Text>
+                </View>
+            )}
 
             {/* ───── LOW RISK WARNING MODAL ───── */}
             <Modal visible={showLowWarning} transparent animationType="fade">
@@ -2051,6 +2256,27 @@ const styles = StyleSheet.create({
         color: '#fff',
         fontSize: 12,
         fontWeight: 'bold',
+    },
+    emergencyModeBanner: {
+        position: 'absolute',
+        top: 160,
+        left: 20,
+        right: 20,
+        backgroundColor: 'rgba(239, 68, 68, 0.96)',
+        paddingVertical: 10,
+        paddingHorizontal: 14,
+        borderRadius: 10,
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'center',
+        gap: 8,
+        zIndex: 9997,
+        elevation: 98,
+    },
+    emergencyModeBannerText: {
+        color: '#fff',
+        fontSize: 13,
+        fontWeight: '700',
     },
     aiAnalyzingPopup: {
         position: 'absolute',

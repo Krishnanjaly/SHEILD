@@ -1,7 +1,9 @@
+import "react-native-gesture-handler";
 import React, { useEffect } from "react";
 import { BackHandler, LogBox } from "react-native";
 import * as SplashScreen from "expo-splash-screen";
 import { Stack } from "expo-router";
+import { GestureHandlerRootView } from "react-native-gesture-handler";
 import EmergencyMonitor from "../components/EmergencyMonitor";
 import { GuardianStateService } from "../services/GuardianStateService";
 
@@ -41,9 +43,9 @@ export default function Layout() {
   }, []);
 
   return (
-    <>
+    <GestureHandlerRootView style={{ flex: 1 }}>
       <EmergencyMonitor />
       <Stack screenOptions={{ headerShown: false }} />
-    </>
+    </GestureHandlerRootView>
   );
 }

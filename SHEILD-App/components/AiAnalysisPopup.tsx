@@ -25,7 +25,7 @@ export default function AiAnalysisPopup({
           <View style={styles.iconWrap}>
             <MaterialIcons name="psychology" size={30} color="#fff" />
           </View>
-          <Text style={styles.title}>AI is analyzing...</Text>
+          <Text style={styles.title}>AI Detecting Abnormal Movement</Text>
           <Text style={styles.movement}>Movement: {detectedMovement}</Text>
 
           <View style={styles.progressTrack}>
@@ -39,7 +39,9 @@ export default function AiAnalysisPopup({
 
           <View style={styles.row}>
             <Text style={styles.progressText}>{progress}%</Text>
-            <Text style={styles.statusText}>{statusText}</Text>
+            <Text style={styles.statusText}>
+              {statusText || "Classifying risk as LOW or HIGH"}
+            </Text>
           </View>
 
           <TouchableOpacity style={styles.cancelBtn} onPress={onCancel}>

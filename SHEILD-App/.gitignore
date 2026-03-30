@@ -45,5 +45,7 @@ app-example
 **/.gradle
 android/.gradle
 android/build
+android/app/build
+android/app/.cxx
 node_modules/
 .expo/

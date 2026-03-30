@@ -51,6 +51,7 @@
     },
     "plugins": [
       "./plugins/withAndroidxAppComponentFactory",
+      "./plugins/withAndroidBuildDefaults",
       "expo-router",
       [
         "expo-speech-recognition",

@@ -1,11 +1,26 @@
-import { PermissionsAndroid, Platform } from "react-native";
+import { AppState, PermissionsAndroid, Platform } from "react-native";
 import {
   ExpoSpeechRecognitionModule,
   ExpoSpeechRecognitionOptions,
+  ExpoSpeechRecognitionResultEvent,
 } from "expo-speech-recognition";
 
 type SpeechResultsEvent = { value?: string[] };
 type SpeechErrorEvent = unknown;
+export type VoiceMode = "keyword" | "emergency";
+export type VoiceErrorKind = "aborted" | "network" | "busy" | "permission" | "unknown";
+
+const voiceEngineState: {
+  isStarting: boolean;
+  isListening: boolean;
+  activeMode: VoiceMode | null;
+  lastErrorKind: VoiceErrorKind | null;
+} = {
+  isStarting: false,
+  isListening: false,
+  activeMode: null,
+  lastErrorKind: null,
+};
 
 export const voiceRuntime: {
   onSpeechResults?: ((event: SpeechResultsEvent) => void) | null;
@@ -19,39 +34,109 @@ export const voiceRuntime: {
   onSpeechError: null,
 };
 
-// 🔊 Setup Native Module Event Listener Hookups
+function extractTranscripts(event: any): string[] {
+  if (event?.results && Array.isArray(event.results)) {
+    return event.results
+      .map((result: any) => result?.transcript)
+      .filter((transcript: any) => typeof transcript === "string" && transcript.trim().length > 0);
+  }
+
+  if (event?.value && Array.isArray(event.value)) {
+    return event.value.filter(
+      (transcript: any) => typeof transcript === "string" && transcript.trim().length > 0
+    );
+  }
+
+  return [];
+}
+
+function attachSpeechListener(
+  eventName: string,
+  listener: (event?: any) => void
+) {
+  const addListener = (ExpoSpeechRecognitionModule as any)?.addListener;
+  if (typeof addListener !== "function") {
+    console.log(`[voiceModule] Missing addListener for speech event: ${eventName}`);
+    return null;
+  }
+
+  return addListener.call(ExpoSpeechRecognitionModule, eventName, listener);
+}
+
 if (ExpoSpeechRecognitionModule) {
-  ExpoSpeechRecognitionModule.addSpeechRecognitionListener("start", () => {
-    console.log("🎤 Voice Recognition Started");
+  attachSpeechListener("start", () => {
+    voiceEngineState.isStarting = false;
+    voiceEngineState.isListening = true;
+    voiceEngineState.lastErrorKind = null;
+    console.log("[voiceModule] Voice recognition started");
   });
 
-  ExpoSpeechRecognitionModule.addSpeechRecognitionListener("result", (event: SpeechResultsEvent) => {
-    if (voiceRuntime.onSpeechResults) {
-      voiceRuntime.onSpeechResults(event);
+  attachSpeechListener("result", (event: ExpoSpeechRecognitionResultEvent) => {
+    const transcripts = extractTranscripts(event);
+    if (transcripts.length === 0) {
+      return;
     }
+
+    if (event?.isFinal) {
+      console.log("[voiceModule] Final transcripts:", transcripts);
+      voiceRuntime.onSpeechResults?.({ value: transcripts });
+      return;
+    }
+
+    console.log("[voiceModule] Partial transcripts:", transcripts);
+    voiceRuntime.onSpeechPartialResults?.({ value: transcripts });
   });
 
-  ExpoSpeechRecognitionModule.addSpeechRecognitionListener("partialResult", (event: SpeechResultsEvent) => {
-    if (voiceRuntime.onSpeechPartialResults) {
-      voiceRuntime.onSpeechPartialResults(event);
-    }
+  attachSpeechListener("end", () => {
+    voiceEngineState.isStarting = false;
+    voiceEngineState.isListening = false;
+    console.log("[voiceModule] Voice recognition ended");
+    voiceRuntime.onSpeechEnd?.();
   });
 
-  ExpoSpeechRecognitionModule.addSpeechRecognitionListener("end", () => {
-    if (voiceRuntime.onSpeechEnd) {
-      voiceRuntime.onSpeechEnd();
-    }
-  });
-
-  ExpoSpeechRecognitionModule.addSpeechRecognitionListener("error", (error: SpeechErrorEvent) => {
-    if (voiceRuntime.onSpeechError) {
-      voiceRuntime.onSpeechError(error);
-    }
+  attachSpeechListener("error", (error: SpeechErrorEvent) => {
+    voiceEngineState.isStarting = false;
+    voiceEngineState.isListening = false;
+    voiceEngineState.lastErrorKind = classifyVoiceError(error);
+    console.log("[voiceModule] Voice recognition error:", error);
+    voiceRuntime.onSpeechError?.(error);
   });
 }
 
 export function isVoiceModuleAvailable() {
   return Boolean(ExpoSpeechRecognitionModule);
+}
+
+export function classifyVoiceError(error: SpeechErrorEvent): VoiceErrorKind {
+  const raw = typeof error === "string" ? error : JSON.stringify(error ?? {});
+  const normalized = raw.toLowerCase();
+
+  if (normalized.includes("aborted")) {
+    return "aborted";
+  }
+  if (normalized.includes("network")) {
+    return "network";
+  }
+  if (
+    normalized.includes("busy") ||
+    normalized.includes("recognizerbusy") ||
+    normalized.includes("already")
+  ) {
+    return "busy";
+  }
+  if (
+    normalized.includes("permission") ||
+    normalized.includes("audio") ||
+    normalized.includes("record_audio")
+  ) {
+    return "permission";
+  }
+
+  return "unknown";
+}
+
+export function getVoiceEngineState() {
+  return { ...voiceEngineState };
 }
 
 function getPreferredAndroidRecognitionService() {
@@ -110,13 +195,28 @@ export async function ensureVoicePermission() {
 
 export async function safeVoiceStart(
   locale = "en-US",
-  options: Partial<ExpoSpeechRecognitionOptions> = {}
+  options: Partial<ExpoSpeechRecognitionOptions> = {},
+  mode: VoiceMode = "keyword"
 ) {
   if (!isVoiceModuleAvailable()) {
     return {
       ok: false,
       reason:
         "Voice native module is unavailable. Rebuild the Android development app with expo run:android.",
+    };
+  }
+
+  if (mode === "keyword" && AppState.currentState !== "active") {
+    return {
+      ok: false,
+      reason: "Speech recognition is disabled while the app is in the background.",
+    };
+  }
+
+  if (voiceEngineState.isStarting || voiceEngineState.isListening) {
+    return {
+      ok: false,
+      reason: "Speech recognition is already active.",
     };
   }
 
@@ -136,16 +236,16 @@ export async function safeVoiceStart(
       };
     }
 
-    try {
-      ExpoSpeechRecognitionModule.abort();
-    } catch {}
-
     const androidRecognitionServicePackage =
       options.androidRecognitionServicePackage ??
       getPreferredAndroidRecognitionService();
 
-    console.log("🎤 Starting speech recognition engine...");
-    
+    console.log("[voiceModule] Starting speech recognition engine");
+    voiceEngineState.isStarting = true;
+    voiceEngineState.isListening = false;
+    voiceEngineState.activeMode = mode;
+    voiceEngineState.lastErrorKind = null;
+
     ExpoSpeechRecognitionModule.start({
       lang: locale,
       interimResults: true,
@@ -159,6 +259,10 @@ export async function safeVoiceStart(
       ok: true,
     };
   } catch (error) {
+    voiceEngineState.isStarting = false;
+    voiceEngineState.isListening = false;
+    voiceEngineState.activeMode = null;
+    voiceEngineState.lastErrorKind = classifyVoiceError(error);
     return {
       ok: false,
       reason: `Speech recognition start failed: ${String(error)}`,
@@ -172,6 +276,9 @@ export async function safeVoiceStop() {
   }
 
   try {
+    voiceEngineState.isStarting = false;
+    voiceEngineState.isListening = false;
+    voiceEngineState.activeMode = null;
     ExpoSpeechRecognitionModule.stop();
   } catch {}
 }
@@ -182,6 +289,9 @@ export async function safeVoiceCancel() {
   }
 
   try {
+    voiceEngineState.isStarting = false;
+    voiceEngineState.isListening = false;
+    voiceEngineState.activeMode = null;
     ExpoSpeechRecognitionModule.abort();
   } catch {}
 }

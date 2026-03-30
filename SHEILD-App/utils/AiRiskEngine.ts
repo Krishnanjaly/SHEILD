@@ -3,7 +3,6 @@ import { Audio } from 'expo-av';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { ActivityService } from '../services/ActivityService';
 import BASE_URL from "../config/api";
-import { startVoiceListening, stopVoiceListening } from '../services/voiceDetection';
 
 const analyzeWithAI = async (text: string) => {
     try {
@@ -68,6 +67,7 @@ class AiRiskEngine {
     private recording: Audio.Recording | null = null;
     private isMonitoring = false;
     private isAnalysisRunning = false;
+    private isAudioPaused = false;
 
     private micLevelInterval: ReturnType<typeof setInterval> | null = null;
     private analysisInterval: ReturnType<typeof setInterval> | null = null;
@@ -96,11 +96,9 @@ class AiRiskEngine {
 
         console.log('AiRiskEngine: Starting passive movement monitoring');
 
-        // (NEW) Start voice listening when monitoring starts, if enabled
-        const micEnabledSetting = await AsyncStorage.getItem("MIC_ENABLED");
-        if (micEnabledSetting !== "false") {
-            startVoiceListening().catch(e => console.log("Voice start failed in passive monitoring:", e));
-        }
+        // Voice listening is now handled by EmergencyMonitor's volume trigger
+        // and the useSpeechRecognitionEvent hooks. We don't start it here
+        // to avoid mic conflicts with Audio.Recording metering.
 
         Accelerometer.setUpdateInterval(200);
         this.accelerometerSubscription = Accelerometer.addListener(data => {
@@ -144,9 +142,6 @@ class AiRiskEngine {
         this.isMonitoring = false;
         await this.stopFullAnalysis();
 
-        // (NEW) Stop voice listening when monitoring stops
-        stopVoiceListening().catch(e => console.log("Voice stop failed in stopMonitoring:", e));
-
         if (this.accelerometerSubscription) {
             this.accelerometerSubscription.remove();
             this.accelerometerSubscription = null;
@@ -171,10 +166,13 @@ class AiRiskEngine {
                 this.lightData = data.illuminance;
             });
 
-            await this.startAudioMonitoring();
-            
-            // Start keyword detection in parallel
-            startVoiceListening().catch(e => console.log("Voice start failed in engine:", e));
+            // Only start audio metering if not paused (speech recognition may be using mic)
+            if (!this.isAudioPaused) {
+                await this.startAudioMonitoring();
+            }
+
+            // Voice listening is handled by EmergencyMonitor hooks
+            // Don't start it here to avoid mic conflicts
 
             if (this.analysisInterval) {
                 clearInterval(this.analysisInterval);
@@ -232,10 +230,44 @@ class AiRiskEngine {
             }
         }
 
-        // Stop keyword detection
-        stopVoiceListening().catch(e => console.log("Voice stop failed in engine:", e));
-
         console.log('AiRiskEngine: Reverted to passive mode');
+    }
+
+    /**
+     * Pause audio metering to release the microphone for SpeechRecognition.
+     * Call this before starting speech recognition to avoid mic conflicts on Android.
+     */
+    public async pauseAudioRecording() {
+        this.isAudioPaused = true;
+        if (this.micLevelInterval) {
+            clearInterval(this.micLevelInterval);
+            this.micLevelInterval = null;
+        }
+        if (this.recording) {
+            try {
+                const status = await this.recording.getStatusAsync();
+                if (status.canRecord || status.isRecording) {
+                    await this.recording.stopAndUnloadAsync();
+                }
+            } catch (e) {
+                console.log('Error pausing audio recording:', e);
+            } finally {
+                this.recording = null;
+            }
+        }
+        console.log('AiRiskEngine: Audio recording paused (mic released for speech recognition)');
+    }
+
+    /**
+     * Resume audio metering after SpeechRecognition stops.
+     * Only resumes if full analysis is still active.
+     */
+    public async resumeAudioRecording() {
+        this.isAudioPaused = false;
+        if (this.isAnalysisRunning) {
+            await this.startAudioMonitoring();
+            console.log('AiRiskEngine: Audio recording resumed');
+        }
     }
 
     private async startAudioMonitoring() {

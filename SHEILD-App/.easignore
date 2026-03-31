@@ -1,0 +1,25 @@
+# Dependencies and local tooling caches
+node_modules/
+.expo/
+.vscode/
+
+# Build outputs and generated native artifacts
+dist/
+temp_native/
+android/.gradle/
+android/build/
+android/app/build/
+android/app/.cxx/
+
+# Local logs and diagnostic dumps
+*.log
+expo_*.log
+build_report.json
+eas-build.json
+eas_build_details.json
+initial_failure.json
+last_builds.json
+latest*.json
+list.json
+sha1*.txt
+RKStorage_phone.*

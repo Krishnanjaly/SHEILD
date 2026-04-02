@@ -80,6 +80,10 @@ const transporter = nodemailer.createTransport({
 app.post("/send-sos", async (req, res) => {
   try {
     const { email, latitude, longitude, keyword, risk_level, media_urls } = req.body;
+    if (!email || typeof email !== "string" || !email.trim()) {
+      return res.status(400).json({ success: false, message: "email is required" });
+    }
+
     const riskLevel = risk_level || "HIGH";
     const hasCoordinates =
       latitude !== undefined &&
@@ -118,6 +122,13 @@ app.post("/send-sos", async (req, res) => {
 
     if (uniqueRecipients.length === 0) {
       return res.json({ success: true, message: "No trusted emails to notify" });
+    }
+
+    if (!process.env.EMAIL_USER || !process.env.EMAIL_PASS) {
+      return res.status(500).json({
+        success: false,
+        message: "Email credentials are missing on the backend",
+      });
     }
 
     const keywordText = keyword || "MANUAL SOS";
@@ -166,7 +177,14 @@ Please check on the user immediately.`,
     });
   } catch (error) {
     console.error("SOS Email error:", error);
-    res.status(500).json({ success: false, message: "Failed to send SOS emails" });
+    res.status(500).json({
+      success: false,
+      message: "Failed to send SOS emails",
+      error: error.message,
+      code: error.code || null,
+      command: error.command || null,
+      response: error.response || null,
+    });
   }
 });
 

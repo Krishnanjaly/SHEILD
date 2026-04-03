@@ -2,7 +2,10 @@ const express = require("express");
 const cors = require("cors");
 const path = require("path");
 const fs = require("fs");
+const dns = require("dns");
 require("dotenv").config();
+
+dns.setDefaultResultOrder("ipv4first");
 
 const aiRoutes = require("./routes/ai.js");
 
@@ -79,9 +82,19 @@ const transporter = nodemailer.createTransport({
 
 app.post("/send-sos", async (req, res) => {
   try {
-    const { email, latitude, longitude, keyword, risk_level, media_urls } = req.body;
-    if (!email || typeof email !== "string" || !email.trim()) {
-      return res.status(400).json({ success: false, message: "email is required" });
+    const { email, user_id, latitude, longitude, keyword, risk_level, media_urls } = req.body;
+    const normalizedEmail =
+      typeof email === "string" && email.trim() ? email.trim().toLowerCase() : null;
+    const normalizedUserId =
+      user_id === undefined || user_id === null || `${user_id}`.trim() === ""
+        ? null
+        : String(user_id).trim();
+
+    if (!normalizedEmail && !normalizedUserId) {
+      return res.status(400).json({
+        success: false,
+        message: "email or user_id is required",
+      });
     }
 
     const riskLevel = risk_level || "HIGH";
@@ -97,12 +110,19 @@ app.post("/send-sos", async (req, res) => {
       : null;
 
     const db = require("./config/db");
-    const [user] = await db.query("SELECT id FROM users WHERE email = ?", [email]);
-    if (user.length === 0) {
+    let users = [];
+    if (normalizedUserId) {
+      [users] = await db.query("SELECT id, email FROM users WHERE id = ?", [normalizedUserId]);
+    } else if (normalizedEmail) {
+      [users] = await db.query("SELECT id, email FROM users WHERE email = ?", [normalizedEmail]);
+    }
+
+    if (users.length === 0) {
       return res.status(404).json({ success: false, message: "User not found" });
     }
 
-    const userId = user[0].id;
+    const userId = users[0].id;
+    const userEmail = users[0].email;
     const [trustedContacts] = await db.query(
       "SELECT email FROM trusted_contact WHERE user_id = ?",
       [userId]
@@ -149,7 +169,7 @@ app.post("/send-sos", async (req, res) => {
       from: process.env.EMAIL_USER,
       to: uniqueRecipients.join(","),
       subject: `EMERGENCY ALERT FROM SHEILD: ${riskLevel} RISK`,
-      text: `Urgent! A ${riskLevel} security risk was detected for ${email}.
+      text: `Urgent! A ${riskLevel} security risk was detected for ${userEmail}.
 Trigger: ${keywordText}
 Live location: ${locationText}
 Timestamp: ${timestampText}
@@ -157,7 +177,7 @@ Media URLs:
 ${mediaText}
 Please check on the user immediately.`,
       html: `<h3>SHEILD EMERGENCY ALERT</h3>
-             <p>A <strong>${riskLevel} risk</strong> was detected for the user associated with <strong>${email}</strong>.</p>
+             <p>A <strong>${riskLevel} risk</strong> was detected for the user associated with <strong>${userEmail}</strong>.</p>
              <p><strong>Trigger:</strong> ${keywordText}</p>
              <p><strong>Timestamp:</strong> ${timestampText}</p>
              ${

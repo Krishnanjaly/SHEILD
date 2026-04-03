@@ -1,0 +1,148 @@
+import React from "react";
+import { Modal, StyleSheet, Text, View } from "react-native";
+import { LinearGradient } from "expo-linear-gradient";
+import { MaterialIcons } from "@expo/vector-icons";
+
+interface AnalysisModalProps {
+  visible: boolean;
+  progress: number;
+  result: "LOW" | "HIGH" | null;
+  subtitle?: string;
+}
+
+export default function AnalysisModal({
+  visible,
+  progress,
+  result,
+  subtitle,
+}: AnalysisModalProps) {
+  const isComplete = result !== null;
+  const isHighRisk = result === "HIGH";
+  const title = isComplete
+    ? isHighRisk
+      ? "HIGH RISK DETECTED"
+      : "LOW RISK DETECTED"
+    : "AI Analysis Running";
+  const helperText = isComplete
+    ? isHighRisk
+      ? "Emergency workflow activated."
+      : "Low-risk workflow activated."
+    : subtitle || "Analyzing movement patterns...";
+
+  return (
+    <Modal visible={visible} transparent animationType="fade">
+      <View style={styles.overlay}>
+        <LinearGradient
+          colors={["rgba(236,19,19,0.18)", "rgba(8,8,8,0.95)"]}
+          style={styles.card}
+        >
+          <View
+            style={[
+              styles.iconShell,
+              isComplete && isHighRisk ? styles.iconShellHigh : styles.iconShellLow,
+            ]}
+          >
+            <MaterialIcons
+              name={isComplete ? "warning" : "graphic-eq"}
+              size={42}
+              color="#fff"
+            />
+          </View>
+
+          <Text style={styles.title}>{title}</Text>
+          <Text style={styles.subtitle}>{helperText}</Text>
+
+          <View style={styles.progressTrack}>
+            <LinearGradient
+              colors={
+                isComplete && isHighRisk
+                  ? ["#ec1313", "#ff5f5f"]
+                  : ["#ec1313", "#ff9f43"]
+              }
+              start={{ x: 0, y: 0 }}
+              end={{ x: 1, y: 0 }}
+              style={[styles.progressFill, { width: `${Math.max(progress, 4)}%` }]}
+            />
+          </View>
+
+          <Text style={styles.percentText}>{Math.round(progress)}%</Text>
+        </LinearGradient>
+      </View>
+    </Modal>
+  );
+}
+
+const styles = StyleSheet.create({
+  overlay: {
+    flex: 1,
+    backgroundColor: "rgba(0,0,0,0.84)",
+    justifyContent: "center",
+    alignItems: "center",
+    padding: 20,
+  },
+  card: {
+    width: "100%",
+    borderRadius: 32,
+    paddingHorizontal: 24,
+    paddingVertical: 36,
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.08)",
+    backgroundColor: "rgba(18,12,12,0.92)",
+    shadowColor: "#ec1313",
+    shadowOpacity: 0.25,
+    shadowRadius: 24,
+    elevation: 18,
+    alignItems: "center",
+  },
+  iconShell: {
+    width: 104,
+    height: 104,
+    borderRadius: 52,
+    justifyContent: "center",
+    alignItems: "center",
+    marginBottom: 24,
+    borderWidth: 1,
+  },
+  iconShellLow: {
+    backgroundColor: "rgba(255,255,255,0.06)",
+    borderColor: "rgba(255,255,255,0.12)",
+  },
+  iconShellHigh: {
+    backgroundColor: "rgba(236,19,19,0.22)",
+    borderColor: "rgba(236,19,19,0.5)",
+  },
+  title: {
+    color: "#fff",
+    fontSize: 28,
+    fontWeight: "800",
+    textAlign: "center",
+    letterSpacing: 0.4,
+  },
+  subtitle: {
+    color: "#d0baba",
+    fontSize: 16,
+    marginTop: 12,
+    marginBottom: 28,
+    textAlign: "center",
+    lineHeight: 22,
+  },
+  progressTrack: {
+    width: "100%",
+    height: 18,
+    borderRadius: 999,
+    backgroundColor: "rgba(255,255,255,0.08)",
+    overflow: "hidden",
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.06)",
+  },
+  progressFill: {
+    height: "100%",
+    borderRadius: 999,
+  },
+  percentText: {
+    color: "#fff",
+    fontSize: 34,
+    fontWeight: "800",
+    marginTop: 22,
+  },
+});

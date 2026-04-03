@@ -16,8 +16,7 @@ import BASE_URL from '../config/api';
 import * as IntentLauncher from 'expo-intent-launcher';
 import { MaterialIcons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
-import AiAnalysisPopup from './AiAnalysisPopup';
-import AbnormalMovementPopup from './AbnormalMovementPopup';
+import AnalysisModal from './AnalysisModal';
 import { foregroundCallService } from '../services/ForegroundCallService';
 import { aiRiskEngine, MovementDetectionEvent, RiskAnalysis, SensorData } from '../utils/AiRiskEngine';
 import { ActivityService } from '../services/ActivityService';
@@ -28,6 +27,11 @@ import { registerGuardianTask } from '../utils/GuardianTask';
 import { findMatchedKeyword } from '../services/keywordMatcher';
 import { classifyAbnormalMovement } from '../services/abnormalMovementClassifier';
 import { abnormalMovementEmergencyService } from '../services/abnormalMovementEmergencyService';
+import {
+    MotionDetectionEvent as SensorMotionDetectionEvent,
+    MotionDetectionService,
+} from '../services/MotionDetectionService';
+import { RiskAnalysisService } from '../services/RiskAnalysisService';
 import {
     classifyVoiceError,
     ensureVoicePermission,
@@ -82,10 +86,12 @@ export default function EmergencyMonitor() {
     const voiceRestartTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const listeningPopupCloseTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const voiceRestartAttemptsRef = useRef(0);
+    const isResettingEmergencyVoiceRef = useRef(false);
     const movementPopupTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const cancelTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const timerIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
     const analysisProgressIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+    const analysisCompletionTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const lastShakeTime = useRef<number>(0);
     const analysisReadyRef = useRef(true);
 
@@ -98,6 +104,7 @@ export default function EmergencyMonitor() {
     const [detectedMovement, setDetectedMovement] = useState<string | null>(null);
     const [analysisProgress, setAnalysisProgress] = useState(0);
     const [analysisStatusText, setAnalysisStatusText] = useState("Idle");
+    const [analysisResult, setAnalysisResult] = useState<'LOW' | 'HIGH' | null>(null);
     const [isEmergencyActive, setIsEmergencyActive] = useState(false);
     const [abnormalMovementPopup, setAbnormalMovementPopup] = useState<{
         visible: boolean;
@@ -393,6 +400,9 @@ export default function EmergencyMonitor() {
             }
 
             console.log(`Restarting speech recognition during emergency window (${voiceRestartAttemptsRef.current}/${MAX_VOICE_RESTART_ATTEMPTS}): ${reason}`);
+            isResettingEmergencyVoiceRef.current = true;
+            await safeVoiceCancel();
+            await new Promise((resolve) => setTimeout(resolve, 150));
             const contextualStrings = Array.from(
                 new Set([...keywordsRef.current.low, ...keywordsRef.current.high])
             );
@@ -402,6 +412,7 @@ export default function EmergencyMonitor() {
                 continuous: true,
                 maxAlternatives: 5,
             }, 'emergency');
+            isResettingEmergencyVoiceRef.current = false;
             if (!voiceStart.ok && isEmergencyListeningWindowActive()) {
                 console.log('Voice restart failed:', voiceStart.reason);
                 scheduleVoiceRestart(`retry after failure: ${voiceStart.reason}`);
@@ -418,14 +429,25 @@ export default function EmergencyMonitor() {
             onSpeechResults(event);
         };
         voiceRuntime.onSpeechEnd = () => {
+            if (isResettingEmergencyVoiceRef.current) {
+                console.log('Ignoring transient speech end while resetting emergency voice session.');
+                return;
+            }
             if (isEmergencyListeningWindowActive()) {
                 scheduleVoiceRestart('speech ended');
             }
         };
         voiceRuntime.onSpeechError = (e) => {
             console.log('Speech Error:', e);
+            const errorKind = classifyVoiceError(e);
+            if (
+                isResettingEmergencyVoiceRef.current &&
+                (errorKind === 'aborted' || errorKind === 'busy')
+            ) {
+                console.log('Ignoring transient speech error while resetting emergency voice session.');
+                return;
+            }
             if (isEmergencyListeningWindowActive()) {
-                const errorKind = classifyVoiceError(e);
                 if (errorKind === 'aborted') {
                     console.log('Speech recognition aborted during emergency listening. Delaying restart.');
                 }
@@ -600,6 +622,7 @@ export default function EmergencyMonitor() {
             clearVoiceRestartTimer();
             clearListeningCountdown();
             clearAiAnalysisProgress();
+            clearAnalysisCompletionTimeout();
             if (movementPopupTimeoutRef.current) {
                 clearTimeout(movementPopupTimeoutRef.current);
                 movementPopupTimeoutRef.current = null;
@@ -611,6 +634,13 @@ export default function EmergencyMonitor() {
         if (analysisProgressIntervalRef.current) {
             clearInterval(analysisProgressIntervalRef.current);
             analysisProgressIntervalRef.current = null;
+        }
+    }, []);
+
+    const clearAnalysisCompletionTimeout = useCallback(() => {
+        if (analysisCompletionTimeoutRef.current) {
+            clearTimeout(analysisCompletionTimeoutRef.current);
+            analysisCompletionTimeoutRef.current = null;
         }
     }, []);
 
@@ -634,11 +664,13 @@ export default function EmergencyMonitor() {
 
     const cancelAiDetection = useCallback(async () => {
         clearAiAnalysisProgress();
+        clearAnalysisCompletionTimeout();
         analysisReadyRef.current = true;
         setIsAnalyzing(false);
         setDetectedMovement(null);
         setAnalysisProgress(0);
         setAnalysisStatusText("Idle");
+        setAnalysisResult(null);
         setAiRiskLevel('NONE');
         setAiConfidence(0);
         setAiRiskTriggers([]);
@@ -650,7 +682,187 @@ export default function EmergencyMonitor() {
             statusText: "Detection cancelled",
             riskLevel: null,
         });
-    }, [clearAiAnalysisProgress, updateGuardianAnalysisUi]);
+    }, [clearAiAnalysisProgress, clearAnalysisCompletionTimeout, updateGuardianAnalysisUi]);
+
+    const runMotionAnalysisSequence = useCallback(async (
+        motionEvent: SensorMotionDetectionEvent
+    ) => {
+        if (
+            isAnalyzing ||
+            isEmergencyActive ||
+            showHighWarning ||
+            showLowWarning ||
+            highRiskSequenceRef.current ||
+            lowRiskSequenceRef.current
+        ) {
+            return;
+        }
+
+        clearAiAnalysisProgress();
+        clearAnalysisCompletionTimeout();
+
+        const thresholdRaw = await AsyncStorage.getItem("AI_RISK_THRESHOLD");
+        const configuredThreshold = thresholdRaw ? Number(thresholdRaw) : undefined;
+        const result = RiskAnalysisService.analyzeMotion(
+            {
+                samples: motionEvent.samples,
+                triggerType: motionEvent.triggerType,
+            },
+            Number.isFinite(configuredThreshold) ? configuredThreshold : undefined
+        );
+
+        const confidence = result.score / 100;
+        triggeredKeywordRef.current = `AI Motion: ${result.triggers.join(", ")}`;
+        setDetectedMovement(motionEvent.description);
+        setAnalysisResult(null);
+        setAnalysisProgress(0);
+        setAnalysisStatusText("Analyzing movement patterns...");
+        setAiRiskLevel('NONE');
+        setAiConfidence(confidence);
+        setAiRiskTriggers(result.triggers);
+        setIsAnalyzing(true);
+
+        await updateGuardianAnalysisUi({
+            isAnalyzing: true,
+            detectedMovement: motionEvent.description,
+            progress: 0,
+            statusText: "Analyzing movement patterns...",
+            riskLevel: null,
+        });
+
+        let nextProgress = 0;
+        analysisProgressIntervalRef.current = setInterval(async () => {
+            nextProgress = Math.min(100, nextProgress + 4);
+            setAnalysisProgress(nextProgress);
+            setAnalysisStatusText(
+                nextProgress < 34
+                    ? "Analyzing movement patterns..."
+                    : nextProgress < 68
+                      ? "Calculating abnormal motion score..."
+                      : "Classifying risk level..."
+            );
+
+            await updateGuardianAnalysisUi({
+                isAnalyzing: true,
+                detectedMovement: motionEvent.description,
+                progress: nextProgress,
+                statusText:
+                    nextProgress < 34
+                        ? "Analyzing movement patterns..."
+                        : nextProgress < 68
+                          ? "Calculating abnormal motion score..."
+                          : "Classifying risk level...",
+                riskLevel: null,
+            });
+
+            if (nextProgress < 100) {
+                return;
+            }
+
+            clearAiAnalysisProgress();
+            setAnalysisResult(result.riskLevel);
+            setAiRiskLevel(result.riskLevel);
+            setAiConfidence(confidence);
+            setAiRiskTriggers(result.triggers);
+            setAnalysisStatusText(result.summary);
+
+            await updateGuardianAnalysisUi({
+                isAnalyzing: false,
+                detectedMovement: motionEvent.description,
+                progress: 100,
+                statusText: result.summary,
+                riskLevel: result.riskLevel,
+            });
+
+            ActivityService.logActivity(
+                `AI_MOTION_${result.riskLevel}: ${result.triggers.join(", ")}`
+            );
+
+            analysisCompletionTimeoutRef.current = setTimeout(async () => {
+                setIsAnalyzing(false);
+
+                if (result.riskLevel === 'HIGH') {
+                    if (highRiskSequenceRef.current) {
+                        return;
+                    }
+
+                    setIsEmergencyActive(true);
+                    highRiskSequenceRef.current = true;
+
+                    try {
+                        await executeHighRiskSequence();
+                    } catch (error) {
+                        console.error("Motion-triggered HIGH RISK workflow error:", error);
+                    } finally {
+                        highRiskSequenceRef.current = false;
+                    }
+                    return;
+                }
+
+                if (lowRiskSequenceRef.current) {
+                    return;
+                }
+
+                lowRiskSequenceRef.current = true;
+                try {
+                    await executeLowRiskAction();
+                } catch (error) {
+                    console.error("Motion-triggered LOW RISK workflow error:", error);
+                } finally {
+                    lowRiskSequenceRef.current = false;
+                }
+            }, 1000);
+        }, 120);
+    }, [
+        clearAiAnalysisProgress,
+        clearAnalysisCompletionTimeout,
+        isAnalyzing,
+        isEmergencyActive,
+        showHighWarning,
+        showLowWarning,
+        updateGuardianAnalysisUi,
+    ]);
+
+    useEffect(() => {
+        let mounted = true;
+        let unsubscribeMotion: (() => void) | null = null;
+        let toggleSub: { remove: () => void } | null = null;
+
+        const syncMotionMonitoring = async () => {
+            const [isLoggedIn, sensorsEnabled] = await Promise.all([
+                AsyncStorage.getItem("isLoggedIn"),
+                AsyncStorage.getItem("SENSORS_ENABLED"),
+            ]);
+
+            if (!mounted) {
+                return;
+            }
+
+            if (isLoggedIn === "true" && sensorsEnabled !== "false") {
+                await MotionDetectionService.start();
+                return;
+            }
+
+            MotionDetectionService.stop();
+        };
+
+        syncMotionMonitoring().catch(console.error);
+        unsubscribeMotion = MotionDetectionService.subscribe((motionEvent) => {
+            runMotionAnalysisSequence(motionEvent).catch((error) => {
+                console.error("Motion analysis sequence error:", error);
+            });
+        });
+        toggleSub = DeviceEventEmitter.addListener("STATUS_TOGGLE_CHANGED", () => {
+            syncMotionMonitoring().catch(console.error);
+        });
+
+        return () => {
+            mounted = false;
+            unsubscribeMotion?.();
+            toggleSub?.remove();
+            MotionDetectionService.stop();
+        };
+    }, [runMotionAnalysisSequence]);
 
     const startAiAnalysisSequence = useCallback(async (movementEvent: MovementDetectionEvent) => {
         clearAiAnalysisProgress();
@@ -935,6 +1147,11 @@ export default function EmergencyMonitor() {
             console.log("🎤 Pausing AI audio metering to free mic for speech recognition...");
             await aiRiskEngine.pauseAudioRecording();
 
+            // Clear any stale recognizer session before opening the emergency window.
+            isResettingEmergencyVoiceRef.current = true;
+            await safeVoiceCancel();
+            await new Promise((resolve) => setTimeout(resolve, 150));
+
             bindVoiceRuntimeHandlers();
             listeningRef.current = true;
             setIsListening(true);
@@ -973,6 +1190,7 @@ export default function EmergencyMonitor() {
                 continuous: true,
                 maxAlternatives: 5,
             }, 'emergency');
+            isResettingEmergencyVoiceRef.current = false;
             if (!voiceStart.ok) {
                 console.log(`Initial speech recognition start failed during emergency window: ${voiceStart.reason}`);
                 scheduleVoiceRestart(`initial emergency start failure: ${voiceStart.reason}`);
@@ -990,6 +1208,7 @@ export default function EmergencyMonitor() {
             }, VOICE_LISTENING_WINDOW_MS);
 
         } catch (e: any) {
+            isResettingEmergencyVoiceRef.current = false;
             console.error("Voice Error: ", e);
             if (listeningWindowEndsAtRef.current && Date.now() < listeningWindowEndsAtRef.current) {
                 scheduleVoiceRestart(`activate emergency listening error: ${e?.message || e}`);
@@ -1055,6 +1274,7 @@ export default function EmergencyMonitor() {
             clearListeningPopupCloseTimer();
             voiceRestartAttemptsRef.current = 0;
             listeningWindowEndsAtRef.current = null;
+            isResettingEmergencyVoiceRef.current = false;
             listeningRef.current = false;
             setIsListening(false);
             setListeningCountdown(0);
@@ -1176,21 +1396,13 @@ export default function EmergencyMonitor() {
             'LOW'
         );
 
-        await Promise.all([
-            EmergencyService.sendTrustedContactAlerts({
-                userId: context.userId,
-                locationUrl: context.locationUrl,
-                keyword: context.keyword,
-                riskLevel: 'LOW',
-                emergencyId,
-            }),
-            EmergencyService.sendSosEmailAlert({
-                email: context.email,
-                locationUrl: context.locationUrl,
-                keyword: context.keyword,
-                riskLevel: 'LOW',
-            }),
-        ]);
+        await EmergencyService.sendSosEmailAlert({
+            userId: context.userId,
+            email: context.email,
+            locationUrl: context.locationUrl,
+            keyword: context.keyword,
+            riskLevel: 'LOW',
+        });
 
         if (emergencyId) {
             await EmergencyService.logAlert(emergencyId, 'email');
@@ -1304,22 +1516,13 @@ export default function EmergencyMonitor() {
                 }))
         );
 
-        await Promise.all([
-            EmergencyService.sendTrustedContactAlerts({
-                userId: context.userId,
-                locationUrl: context.locationUrl,
-                keyword: context.keyword,
-                riskLevel: 'HIGH',
-                emergencyId,
-                contacts: contactsWithLocation,
-            }),
-            EmergencyService.sendSosEmailAlert({
-                email: context.email,
-                locationUrl: context.locationUrl,
-                keyword: context.keyword,
-                riskLevel: 'HIGH',
-            }),
-        ]);
+        await EmergencyService.sendSosEmailAlert({
+            userId: context.userId,
+            email: context.email,
+            locationUrl: context.locationUrl,
+            keyword: context.keyword,
+            riskLevel: 'HIGH',
+        });
 
         if (emergencyId) {
             await EmergencyService.logAlert(emergencyId, 'email');
@@ -2122,21 +2325,12 @@ export default function EmergencyMonitor() {
                 </View>
             )}
 
-            <AiAnalysisPopup
+            <AnalysisModal
                 visible={isAnalyzing}
-                detectedMovement={detectedMovement || "Movement detected"}
                 progress={analysisProgress}
-                statusText={analysisStatusText}
-                onCancel={cancelAiDetection}
+                result={analysisResult}
+                subtitle={analysisStatusText}
             />
-            {abnormalMovementPopup && (
-                <AbnormalMovementPopup
-                    visible={abnormalMovementPopup.visible}
-                    classification={abnormalMovementPopup.classification}
-                    title={abnormalMovementPopup.title}
-                    message={abnormalMovementPopup.message}
-                />
-            )}
 
             {isEmergencyActive && (
                 <View style={styles.emergencyModeBanner}>

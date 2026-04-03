@@ -214,14 +214,15 @@ export const EmergencyService = {
     },
 
     async sendSosEmailAlert(params: {
+        userId?: string | null;
         email: string | null;
         locationUrl: string;
         keyword: string | null;
         riskLevel: "LOW" | "HIGH";
         mediaUrls?: string[];
     }) {
-        if (!params.email) {
-            return { success: false, message: "Missing user email" };
+        if (!params.email && !params.userId) {
+            return { success: false, message: "Missing user email and userId" };
         }
 
         try {
@@ -230,6 +231,7 @@ export const EmergencyService = {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({
+                    user_id: params.userId ?? null,
                     email: params.email,
                     latitude,
                     longitude,
@@ -242,7 +244,11 @@ export const EmergencyService = {
             const rawResponse = await response.text();
 
             try {
-                return JSON.parse(rawResponse);
+                const parsed = JSON.parse(rawResponse);
+                if (!response.ok || parsed?.success === false) {
+                    console.error("SOS email alert failed:", parsed);
+                }
+                return parsed;
             } catch {
                 console.error("Non-JSON SOS response:", rawResponse);
                 return {

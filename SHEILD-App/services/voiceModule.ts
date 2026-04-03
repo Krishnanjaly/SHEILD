@@ -179,16 +179,61 @@ async function resolveRecognitionLocale(
     const localeResult = await ExpoSpeechRecognitionModule.getSupportedLocales({
       androidRecognitionServicePackage,
     });
-    const availableLocales = [
-      ...(localeResult.installedLocales ?? []),
-      ...(localeResult.locales ?? []),
-    ].filter(Boolean);
+    const installedLocales = (localeResult.installedLocales ?? []).filter(Boolean);
+    const supportedLocales = (localeResult.locales ?? []).filter(Boolean);
+    const availableLocales = [...installedLocales, ...supportedLocales];
 
     if (availableLocales.length === 0) {
       return requestedLocale;
     }
 
+    const uniqueInstalledLocales = Array.from(new Set(installedLocales));
     const uniqueLocales = Array.from(new Set(availableLocales));
+
+    // Prefer locales that are already installed on the device.
+    // Some Android recognition services advertise support for locales like en-US
+    // but immediately fail with LANGUAGE_PACK_ERROR when that language pack
+    // is not installed. Falling back to an installed same-language locale like
+    // en-GB keeps recognition working.
+    const exactInstalledRequested = uniqueInstalledLocales.find(
+      (locale) => locale.toLowerCase() === normalizedRequested
+    );
+    if (exactInstalledRequested) {
+      return exactInstalledRequested;
+    }
+
+    const sameLanguageInstalledRequested = uniqueInstalledLocales.find(
+      (locale) => locale.toLowerCase().split("-")[0] === requestedLanguage
+    );
+    if (sameLanguageInstalledRequested) {
+      if (sameLanguageInstalledRequested.toLowerCase() !== normalizedRequested) {
+        console.log(
+          `[voiceModule] Requested locale ${requestedLocale} is not installed. Falling back to installed locale ${sameLanguageInstalledRequested}.`
+        );
+      }
+      return sameLanguageInstalledRequested;
+    }
+
+    const exactInstalledDeviceLocale = uniqueInstalledLocales.find(
+      (locale) => locale.toLowerCase() === normalizedDeviceLocale
+    );
+    if (exactInstalledDeviceLocale) {
+      console.log(
+        `[voiceModule] Requested locale ${requestedLocale} is not installed. Falling back to installed device locale ${exactInstalledDeviceLocale}.`
+      );
+      return exactInstalledDeviceLocale;
+    }
+
+    const sameLanguageInstalledDevice = uniqueInstalledLocales.find(
+      (locale) => locale.toLowerCase().split("-")[0] === deviceLanguage
+    );
+    if (sameLanguageInstalledDevice) {
+      console.log(
+        `[voiceModule] Requested locale ${requestedLocale} is not installed. Falling back to installed device language locale ${sameLanguageInstalledDevice}.`
+      );
+      return sameLanguageInstalledDevice;
+    }
+
     const exactRequested = uniqueLocales.find(
       (locale) => locale.toLowerCase() === normalizedRequested
     );

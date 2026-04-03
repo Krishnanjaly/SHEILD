@@ -1,6 +1,9 @@
 const db = require("../config/db");
 const nodemailer = require("nodemailer");
 const cloudinary = require("cloudinary").v2;
+const dns = require("dns");
+
+dns.setDefaultResultOrder("ipv4first");
 
 cloudinary.config({
   cloud_name: process.env.CLOUDINARY_CLOUD_NAME,

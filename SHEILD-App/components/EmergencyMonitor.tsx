@@ -32,6 +32,8 @@ import {
     MotionDetectionService,
 } from '../services/MotionDetectionService';
 import { RiskAnalysisService } from '../services/RiskAnalysisService';
+import { AudioCaptureService } from '../services/AudioCaptureService';
+import { HuggingFaceService } from '../services/HuggingFaceService';
 import {
     classifyVoiceError,
     ensureVoicePermission,
@@ -94,6 +96,7 @@ export default function EmergencyMonitor() {
     const analysisCompletionTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const lastShakeTime = useRef<number>(0);
     const analysisReadyRef = useRef(true);
+    const lastCombinedAnalysisAtRef = useRef(0);
 
     // AI Risk Detection State
     const [aiRiskLevel, setAiRiskLevel] = useState<'LOW' | 'HIGH' | 'NONE'>('NONE');
@@ -105,6 +108,7 @@ export default function EmergencyMonitor() {
     const [analysisProgress, setAnalysisProgress] = useState(0);
     const [analysisStatusText, setAnalysisStatusText] = useState("Idle");
     const [analysisResult, setAnalysisResult] = useState<'LOW' | 'HIGH' | null>(null);
+    const [analysisResultMessage, setAnalysisResultMessage] = useState("");
     const [isEmergencyActive, setIsEmergencyActive] = useState(false);
     const [abnormalMovementPopup, setAbnormalMovementPopup] = useState<{
         visible: boolean;
@@ -650,9 +654,15 @@ export default function EmergencyMonitor() {
     }, []);
 
     const getAnalysisStatusText = (progressValue: number) => {
-        if (progressValue < 34) return "Analyzing motion pattern...";
-        if (progressValue < 68) return "Checking sensor intensity...";
-        return "Evaluating risk level...";
+        if (progressValue < 34) return "Analyzing motion...";
+        if (progressValue < 68) return "Analyzing audio...";
+        return "Calculating risk...";
+    };
+
+    const getAnalysisResultMessage = (riskLevel: 'LOW' | 'HIGH') => {
+        return riskLevel === 'HIGH'
+            ? "Emergency protocol activated"
+            : "Alerting contacts silently";
     };
 
     const updateGuardianAnalysisUi = useCallback(async (
@@ -676,6 +686,7 @@ export default function EmergencyMonitor() {
         setAnalysisProgress(0);
         setAnalysisStatusText("Idle");
         setAnalysisResult(null);
+        setAnalysisResultMessage("");
         setAiRiskLevel('NONE');
         setAiConfidence(0);
         setAiRiskTriggers([]);
@@ -690,7 +701,8 @@ export default function EmergencyMonitor() {
     }, [clearAiAnalysisProgress, clearAnalysisCompletionTimeout, updateGuardianAnalysisUi]);
 
     const runMotionAnalysisSequence = useCallback(async (
-        motionEvent: SensorMotionDetectionEvent
+        motionEvent?: SensorMotionDetectionEvent,
+        triggerSource: 'MOTION' | 'VOLUME' = 'MOTION'
     ) => {
         if (
             isAnalyzing ||
@@ -703,124 +715,140 @@ export default function EmergencyMonitor() {
             return;
         }
 
+        const now = Date.now();
+        if (now - lastCombinedAnalysisAtRef.current < 15000) {
+            return;
+        }
+        lastCombinedAnalysisAtRef.current = now;
+
         clearAiAnalysisProgress();
         clearAnalysisCompletionTimeout();
 
-        const thresholdRaw = await AsyncStorage.getItem("AI_RISK_THRESHOLD");
-        const configuredThreshold = thresholdRaw ? Number(thresholdRaw) : undefined;
-        const result = RiskAnalysisService.analyzeMotion(
-            {
-                samples: motionEvent.samples,
-                triggerType: motionEvent.triggerType,
-            },
-            Number.isFinite(configuredThreshold) ? configuredThreshold : undefined
-        );
+        const detectedLabel =
+            triggerSource === 'VOLUME'
+                ? 'Volume trigger detected'
+                : motionEvent?.description || 'Abnormal motion detected';
 
-        const confidence = result.score / 100;
-        triggeredKeywordRef.current = `AI Motion: ${result.triggers.join(", ")}`;
-        setDetectedMovement(motionEvent.description);
+        setDetectedMovement(detectedLabel);
         setAnalysisResult(null);
+        setAnalysisResultMessage("");
         setAnalysisProgress(0);
-        setAnalysisStatusText("Analyzing movement patterns...");
+        setAnalysisStatusText("Analyzing motion...");
         setAiRiskLevel('NONE');
-        setAiConfidence(confidence);
-        setAiRiskTriggers(result.triggers);
+        setAiConfidence(0);
+        setAiRiskTriggers([]);
         setIsAnalyzing(true);
 
         await updateGuardianAnalysisUi({
             isAnalyzing: true,
-            detectedMovement: motionEvent.description,
+            detectedMovement: detectedLabel,
             progress: 0,
-            statusText: "Analyzing movement patterns...",
+            statusText: "Analyzing motion...",
             riskLevel: null,
         });
 
-        let nextProgress = 0;
-        analysisProgressIntervalRef.current = setInterval(async () => {
-            nextProgress = Math.min(100, nextProgress + 4);
-            setAnalysisProgress(nextProgress);
-            setAnalysisStatusText(
-                nextProgress < 34
-                    ? "Analyzing movement patterns..."
-                    : nextProgress < 68
-                      ? "Calculating abnormal motion score..."
-                      : "Classifying risk level..."
+        const thresholdRaw = await AsyncStorage.getItem("AI_RISK_THRESHOLD");
+        const configuredThreshold = thresholdRaw ? Number(thresholdRaw) : undefined;
+        const triggerType = motionEvent?.triggerType ?? 'JERK';
+        const motionSamples = motionEvent?.samples?.length
+            ? motionEvent.samples
+            : MotionDetectionService.getRecentSamples(24);
+
+        const progressPromise = new Promise<void>((resolve) => {
+            let nextProgress = 0;
+            analysisProgressIntervalRef.current = setInterval(async () => {
+                nextProgress = Math.min(100, nextProgress + 4);
+                const nextStatusText = getAnalysisStatusText(nextProgress);
+                setAnalysisProgress(nextProgress);
+                setAnalysisStatusText(nextStatusText);
+                await updateGuardianAnalysisUi({
+                    isAnalyzing: true,
+                    detectedMovement: detectedLabel,
+                    progress: nextProgress,
+                    statusText: nextStatusText,
+                    riskLevel: null,
+                });
+
+                if (nextProgress >= 100) {
+                    clearAiAnalysisProgress();
+                    resolve();
+                }
+            }, 120);
+        });
+
+        const analysisPromise = (async () => {
+            let emotionResults: Array<{ label: string; score: number }> = [];
+
+            try {
+                const capturedAudio = await AudioCaptureService.captureAnalysisClip();
+                try {
+                    emotionResults = await HuggingFaceService.analyzeEmotionFromAudio(capturedAudio.uri);
+                } catch (error) {
+                    console.log('Hugging Face emotion analysis failed. Using motion-only analysis.', error);
+                }
+            } catch (error) {
+                console.log('Audio capture failed. Using motion-only analysis.', error);
+            }
+
+            return RiskAnalysisService.analyzeCombined(
+                {
+                    samples: motionSamples,
+                    triggerType,
+                    emotions: emotionResults,
+                },
+                Number.isFinite(configuredThreshold) ? configuredThreshold : undefined
             );
+        })();
 
-            await updateGuardianAnalysisUi({
-                isAnalyzing: true,
-                detectedMovement: motionEvent.description,
-                progress: nextProgress,
-                statusText:
-                    nextProgress < 34
-                        ? "Analyzing movement patterns..."
-                        : nextProgress < 68
-                          ? "Calculating abnormal motion score..."
-                          : "Classifying risk level...",
-                riskLevel: null,
-            });
+        const [result] = await Promise.all([analysisPromise, progressPromise]);
+        const confidence = result.finalScore / 100;
 
-            if (nextProgress < 100) {
+        triggeredKeywordRef.current = `AI Analysis: ${result.triggers.join(", ")}`;
+        setAnalysisResult(result.riskLevel);
+        setAnalysisResultMessage(getAnalysisResultMessage(result.riskLevel));
+        setAiRiskLevel(result.riskLevel);
+        setAiConfidence(confidence);
+        setAiRiskTriggers(result.triggers);
+        setAnalysisStatusText(result.summary);
+
+        await updateGuardianAnalysisUi({
+            isAnalyzing: false,
+            detectedMovement: detectedLabel,
+            progress: 100,
+            statusText: result.summary,
+            riskLevel: result.riskLevel,
+        });
+
+        ActivityService.logActivity(
+            `AI_${triggerSource}_${result.riskLevel}: ${result.triggers.join(", ")}`
+        );
+
+        analysisCompletionTimeoutRef.current = setTimeout(async () => {
+            setIsAnalyzing(false);
+
+            const workflowAnalysis: RiskAnalysis = {
+                riskLevel: result.riskLevel,
+                confidence,
+                triggers: result.triggers,
+                sensorData: {
+                    accelerometer: null,
+                    gyroscope: null,
+                    light: luxRef.current,
+                    timestamp: Date.now(),
+                },
+            };
+
+            if (result.riskLevel === 'HIGH') {
+                triggerHighRiskAiAlert(workflowAnalysis);
                 return;
             }
 
-            clearAiAnalysisProgress();
-            setAnalysisResult(result.riskLevel);
-            setAiRiskLevel(result.riskLevel);
-            setAiConfidence(confidence);
-            setAiRiskTriggers(result.triggers);
-            setAnalysisStatusText(result.summary);
-
-            await updateGuardianAnalysisUi({
-                isAnalyzing: false,
-                detectedMovement: motionEvent.description,
-                progress: 100,
-                statusText: result.summary,
-                riskLevel: result.riskLevel,
-            });
-
-            ActivityService.logActivity(
-                `AI_MOTION_${result.riskLevel}: ${result.triggers.join(", ")}`
-            );
-
-            analysisCompletionTimeoutRef.current = setTimeout(async () => {
-                setIsAnalyzing(false);
-
-                if (result.riskLevel === 'HIGH') {
-                    if (highRiskSequenceRef.current) {
-                        return;
-                    }
-
-                    setIsEmergencyActive(true);
-                    highRiskSequenceRef.current = true;
-
-                    try {
-                        await executeHighRiskSequence();
-                    } catch (error) {
-                        console.error("Motion-triggered HIGH RISK workflow error:", error);
-                    } finally {
-                        highRiskSequenceRef.current = false;
-                    }
-                    return;
-                }
-
-                if (lowRiskSequenceRef.current) {
-                    return;
-                }
-
-                lowRiskSequenceRef.current = true;
-                try {
-                    await executeLowRiskAction();
-                } catch (error) {
-                    console.error("Motion-triggered LOW RISK workflow error:", error);
-                } finally {
-                    lowRiskSequenceRef.current = false;
-                }
-            }, 1000);
-        }, 120);
+            triggerLowRiskAiAlert(workflowAnalysis);
+        }, 2500);
     }, [
         clearAiAnalysisProgress,
         clearAnalysisCompletionTimeout,
+        getAnalysisStatusText,
         isAnalyzing,
         isEmergencyActive,
         showHighWarning,
@@ -1401,6 +1429,14 @@ export default function EmergencyMonitor() {
             'LOW'
         );
 
+        await EmergencyService.sendTrustedContactAlerts({
+            userId: context.userId,
+            locationUrl: context.locationUrl,
+            keyword: context.keyword,
+            riskLevel: 'LOW',
+            emergencyId,
+        });
+
         await EmergencyService.sendSosEmailAlert({
             userId: context.userId,
             email: context.email,
@@ -1507,38 +1543,6 @@ export default function EmergencyMonitor() {
         setShowAiRiskAlert(false);
         setShowHighWarning(true);
         startHighRiskCountdown(() => executeHighRiskSequence());
-        return;
-        setHighCountdown(10);
-
-        if (highCancelTimeoutRef.current) clearTimeout(highCancelTimeoutRef.current);
-        if (highTimerIntervalRef.current) clearInterval(highTimerIntervalRef.current);
-
-        let countdown = 10;
-        highTimerIntervalRef.current = setInterval(() => {
-            countdown--;
-            setHighCountdown(countdown);
-
-            if (countdown <= 0) {
-                if (highTimerIntervalRef.current) clearInterval(highTimerIntervalRef.current);
-                setShowHighWarning(false);
-
-                if (!isCancelledRef.current && !highRiskSequenceRef.current) {
-                    highRiskSequenceRef.current = true;
-                    executeHighRiskSequence()
-                        .catch((err) => {
-                            console.error("High risk alerts/calls error:", err);
-                        })
-                        .finally(() => {
-                            highRiskSequenceRef.current = false;
-                        });
-                }
-            }
-        }, 1000);
-
-        highCancelTimeoutRef.current = setTimeout(() => {
-            if (highTimerIntervalRef.current) clearInterval(highTimerIntervalRef.current);
-            setShowHighWarning(false);
-        }, 10000);
     };
 
     const executeHighRiskSequence = async () => {
@@ -1555,7 +1559,18 @@ export default function EmergencyMonitor() {
             'HIGH'
         );
 
-        const contacts = await EmergencyService.getTrustedContacts(context.userId);
+        const alertedContacts = await EmergencyService.sendTrustedContactAlerts({
+            userId: context.userId,
+            locationUrl: context.locationUrl,
+            keyword: context.keyword,
+            riskLevel: 'HIGH',
+            emergencyId,
+        });
+
+        const contacts = (Array.isArray(alertedContacts) && alertedContacts.length > 0)
+            ? alertedContacts
+            : await EmergencyService.getTrustedContacts(context.userId);
+
         const contactsWithLocation = await foregroundCallService.updateContactsWithLocation(
             context.userId,
             contacts
@@ -1842,14 +1857,14 @@ export default function EmergencyMonitor() {
         ) {
             lastVolumePressRef.current = [];
             volumeHistory.current = [];
-            console.log('VOLUME BUTTON TRIGGER - KEYWORD WORKFLOW ACTIVATED');
-            activateEmergencyListening().catch((error) => {
-                console.log('Volume trigger activation error:', error);
+            console.log('VOLUME BUTTON TRIGGER - AI ANALYSIS ACTIVATED');
+            runMotionAnalysisSequence(undefined, 'VOLUME').catch((error) => {
+                console.log('Volume-triggered AI analysis error:', error);
             });
         }
 
         recenterVolumeForHardwareTrigger().catch(() => {});
-    }, [recenterVolumeForHardwareTrigger]);
+    }, [recenterVolumeForHardwareTrigger, runMotionAnalysisSequence]);
     
     const performRiskAnalysis = async (): Promise<RiskAnalysis> => {
         return await aiRiskEngine.performRiskAnalysis();
@@ -1972,8 +1987,10 @@ export default function EmergencyMonitor() {
                 setShowLowWarning(false);
                 
                 if (!isCancelledRef.current) {
-                    console.log('⚠️ AI LOW RISK CONFIRMED - Starting voice monitoring');
-                    activateEmergencyListening();
+                    console.log('⚠️ AI LOW RISK CONFIRMED - Alerting contacts silently');
+                    executeLowRiskAction().catch((error) => {
+                        console.error("Low risk alert execution error:", error);
+                    });
                 }
             }
         }, 1000);
@@ -2385,6 +2402,7 @@ export default function EmergencyMonitor() {
                 progress={analysisProgress}
                 result={analysisResult}
                 subtitle={analysisStatusText}
+                resultMessage={analysisResultMessage}
             />
 
             {isEmergencyActive && (

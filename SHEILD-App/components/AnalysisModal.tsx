@@ -8,6 +8,7 @@ interface AnalysisModalProps {
   progress: number;
   result: "LOW" | "HIGH" | null;
   subtitle?: string;
+  resultMessage?: string;
 }
 
 export default function AnalysisModal({
@@ -15,6 +16,7 @@ export default function AnalysisModal({
   progress,
   result,
   subtitle,
+  resultMessage,
 }: AnalysisModalProps) {
   const isComplete = result !== null;
   const isHighRisk = result === "HIGH";
@@ -25,16 +27,20 @@ export default function AnalysisModal({
     : "AI Analysis Running";
   const helperText = isComplete
     ? isHighRisk
-      ? "Emergency workflow activated."
-      : "Low-risk workflow activated."
-    : subtitle || "Analyzing movement patterns...";
+      ? resultMessage || "Emergency protocol activated"
+      : resultMessage || "Alerting contacts silently"
+    : subtitle || "Detecting abnormal activity...";
 
   return (
     <Modal visible={visible} transparent animationType="fade">
       <View style={styles.overlay}>
         <LinearGradient
-          colors={["rgba(236,19,19,0.18)", "rgba(8,8,8,0.95)"]}
-          style={styles.card}
+          colors={
+            isComplete && isHighRisk
+              ? ["rgba(236,19,19,0.4)", "rgba(12,6,6,0.97)"]
+              : ["rgba(255,132,66,0.22)", "rgba(8,8,8,0.95)"]
+          }
+          style={[styles.card, isComplete && isHighRisk ? styles.cardHigh : null]}
         >
           <View
             style={[
@@ -57,7 +63,7 @@ export default function AnalysisModal({
               colors={
                 isComplete && isHighRisk
                   ? ["#ec1313", "#ff5f5f"]
-                  : ["#ec1313", "#ff9f43"]
+                  : ["#ff7a3d", "#ffd166"]
               }
               start={{ x: 0, y: 0 }}
               end={{ x: 1, y: 0 }}
@@ -93,6 +99,10 @@ const styles = StyleSheet.create({
     shadowRadius: 24,
     elevation: 18,
     alignItems: "center",
+  },
+  cardHigh: {
+    shadowOpacity: 0.45,
+    shadowRadius: 30,
   },
   iconShell: {
     width: 104,

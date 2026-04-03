@@ -168,6 +168,10 @@ class MotionDetectionServiceImpl {
     };
   }
 
+  getRecentSamples(limit: number = 24) {
+    return this.samples.slice(-limit);
+  }
+
   isActive() {
     return this.isRunning;
   }

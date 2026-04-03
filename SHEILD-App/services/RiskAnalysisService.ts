@@ -24,11 +24,49 @@ export interface RiskAnalysisResult {
   };
 }
 
+export interface EmotionAnalysisInput {
+  label: string;
+  score: number;
+}
+
+export interface CombinedRiskAnalysisInput {
+  samples: MotionSample[];
+  triggerType: "FALL" | "SHAKE" | "JERK";
+  emotions?: EmotionAnalysisInput[];
+}
+
+export interface CombinedRiskAnalysisResult extends RiskAnalysisResult {
+  motionScore: number;
+  emotionScore: number;
+  finalScore: number;
+  dominantEmotion: string;
+  usedMotionFallback: boolean;
+}
+
 const DEFAULT_THRESHOLD = 60;
 const MAX_ACCELERATION = 40;
 const MAX_ROTATION = 18;
 const SHAKE_REFERENCE_DURATION_MS = 4000;
 const SPIKE_ACCELERATION_THRESHOLD = 21;
+const DEFAULT_EMOTION_WEIGHT = 45;
+
+const EMOTION_WEIGHTS: Record<string, number> = {
+  angry: 95,
+  anger: 95,
+  fear: 100,
+  fearful: 100,
+  frustrated: 82,
+  frustration: 82,
+  sad: 68,
+  sadness: 68,
+  disgust: 78,
+  surprise: 62,
+  excited: 55,
+  happy: 42,
+  happiness: 42,
+  calm: 24,
+  neutral: 18,
+};
 
 const clamp = (value: number, min: number, max: number) =>
   Math.min(max, Math.max(min, value));
@@ -127,6 +165,55 @@ export const RiskAnalysisService = {
         suddenSpikeCount,
         averageAcceleration,
       },
+    };
+  },
+
+  mapEmotionToRisk(label: string, confidence: number) {
+    const normalizedLabel = label.trim().toLowerCase();
+    const baseWeight = EMOTION_WEIGHTS[normalizedLabel] ?? DEFAULT_EMOTION_WEIGHT;
+    return clamp(Math.round(baseWeight * clamp(confidence, 0, 1)), 0, 100);
+  },
+
+  analyzeCombined(
+    input: CombinedRiskAnalysisInput,
+    configuredThreshold?: number
+  ): CombinedRiskAnalysisResult {
+    const motionAnalysis = this.analyzeMotion(input, configuredThreshold);
+    const threshold = this.getThreshold(configuredThreshold);
+    const emotions = (input.emotions ?? []).slice().sort((a, b) => b.score - a.score);
+    const dominantEmotion = emotions[0]?.label?.trim().toLowerCase() || "neutral";
+    const emotionConfidence = emotions[0]?.score ?? 0;
+    const usedMotionFallback = emotions.length === 0;
+    const motionScore = motionAnalysis.score;
+    const emotionScore = usedMotionFallback
+      ? motionScore
+      : this.mapEmotionToRisk(dominantEmotion, emotionConfidence);
+
+    const finalScore = usedMotionFallback
+      ? motionScore
+      : clamp(
+          Math.round(motionScore * 0.55 + emotionScore * 0.45),
+          0,
+          100
+        );
+
+    const riskLevel: "LOW" | "HIGH" = finalScore >= threshold ? "HIGH" : "LOW";
+    const emotionTrigger = usedMotionFallback
+      ? "Audio emotion unavailable"
+      : `Detected emotion: ${dominantEmotion}`;
+    const triggers = Array.from(new Set([...motionAnalysis.triggers, emotionTrigger]));
+
+    return {
+      ...motionAnalysis,
+      score: finalScore,
+      riskLevel,
+      summary: riskLevel === "HIGH" ? "HIGH RISK DETECTED" : "LOW RISK DETECTED",
+      triggers,
+      motionScore,
+      emotionScore,
+      finalScore,
+      dominantEmotion,
+      usedMotionFallback,
     };
   },
 };

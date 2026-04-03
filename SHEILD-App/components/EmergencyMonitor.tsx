@@ -1526,23 +1526,21 @@ export default function EmergencyMonitor() {
                 }))
         );
 
-        await EmergencyService.sendSosEmailAlert({
+        const emailTask = EmergencyService.sendSosEmailAlert({
             userId: context.userId,
             email: context.email,
             locationUrl: context.locationUrl,
             keyword: context.keyword,
             riskLevel: 'HIGH',
-        });
-
-        if (emergencyId) {
-            await EmergencyService.logAlert(emergencyId, 'email');
-        }
-
-        await startHighRiskRecording(emergencyId ?? undefined);
-
-        if (isCancelledRef.current) {
-            return;
-        }
+        })
+            .then(async () => {
+                if (emergencyId) {
+                    await EmergencyService.logAlert(emergencyId, 'email');
+                }
+            })
+            .catch((error) => {
+                console.error("High risk email alert error:", error);
+            });
 
         const calledContact = await foregroundCallService.callNearestEmergencyContact(
             contactsWithLocation,
@@ -1559,6 +1557,14 @@ export default function EmergencyMonitor() {
 
         setShowContactCalling(false);
         setCallingContactName('');
+
+        if (isCancelledRef.current) {
+            await emailTask;
+            return;
+        }
+
+        await startHighRiskRecording(emergencyId ?? undefined);
+        await emailTask;
     };
 
     const triggerCall = async (phone: string) => {

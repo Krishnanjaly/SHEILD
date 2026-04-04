@@ -2384,7 +2384,7 @@ export default function EmergencyMonitor() {
             )}
 
             {/* ───── AI RISK STATUS INDICATOR ───── */}
-            {aiRiskLevel !== 'NONE' && (
+            {aiRiskLevel !== 'NONE' && !isListening && (
                 <View style={[styles.aiRiskIndicator, aiRiskLevel === 'HIGH' ? styles.aiRiskHigh : styles.aiRiskLow]}>
                     <MaterialIcons 
                         name={aiRiskLevel === 'HIGH' ? "warning" : "info"} 
@@ -2398,14 +2398,14 @@ export default function EmergencyMonitor() {
             )}
 
             <AnalysisModal
-                visible={isAnalyzing}
+                visible={isAnalyzing && !isListening}
                 progress={analysisProgress}
                 result={analysisResult}
                 subtitle={analysisStatusText}
                 resultMessage={analysisResultMessage}
             />
 
-            {isEmergencyActive && (
+            {isEmergencyActive && !isListening && (
                 <View style={styles.emergencyModeBanner}>
                     <MaterialIcons name="warning" size={16} color="#fff" />
                     <Text style={styles.emergencyModeBannerText}>Emergency Mode Active</Text>

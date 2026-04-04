@@ -17,7 +17,6 @@ import haversine from 'haversine';
 import { addVolumeListener } from "react-native-volume-manager";
 import { fetchKeywords } from "../services/keywordService";
 import { DeviceEventEmitter } from "react-native";
-import EmergencyOverlay from "../components/EmergencyOverlay";
 import * as IntentLauncher from 'expo-intent-launcher';
 import { Audio } from 'expo-av';
 import { aiRiskEngine, RiskAnalysis } from "../utils/AiRiskEngine";
@@ -36,7 +35,6 @@ export default function Dashboard() {
   const [menuVisible, setMenuVisible] = useState(false);
   const [lowKeywords, setLowKeywords] = useState<string[]>([]);
   const [highKeywords, setHighKeywords] = useState<string[]>([]);
-  const [overlayVisible, setOverlayVisible] = useState(false);
   const [micStatus, setMicStatus] = useState("Inactive");
   const [locationStatus, setLocationStatus] = useState("Off");
   const [sensorStatus, setSensorStatus] = useState("Locked");
@@ -62,14 +60,6 @@ export default function Dashboard() {
   }, []);
 
   useEffect(() => {
-
-    const sub1 = DeviceEventEmitter.addListener("EMERGENCY_LISTENING_START", () => {
-      setOverlayVisible(true);
-    });
-
-    const sub2 = DeviceEventEmitter.addListener("EMERGENCY_LISTENING_STOP", () => {
-      setOverlayVisible(false);
-    });
 
     const loadActivities = async () => {
       const data = await ActivityService.getActivities();
@@ -98,19 +88,12 @@ export default function Dashboard() {
     });
 
     return () => {
-      sub1.remove();
-      sub2.remove();
       sub3.remove();
       sub4.remove();
       sub5.remove();
     };
 
   }, []);
-
-  const handleCancelListening = () => {
-    setOverlayVisible(false); // Instantly hide the overlay
-    DeviceEventEmitter.emit("EMERGENCY_LISTENING_CANCEL"); // Tell EmergencyMonitor to unlock mic
-  };
 
   const startListeningMode = () => {
     console.log("Emergency listening started");
@@ -254,7 +237,7 @@ export default function Dashboard() {
         try {
           const { status: locPerm } = await Location.getForegroundPermissionsAsync();
           if (locPerm === "granted") {
-            if (overlayVisible || aiRiskEngine.isMonitoringActive()) {
+            if (aiRiskEngine.isMonitoringActive()) {
               setLocationStatus("Shared");
             } else {
               setLocationStatus("Ready");
@@ -285,7 +268,7 @@ export default function Dashboard() {
     const interval = setInterval(updateStatuses, 3000);
 
     return () => clearInterval(interval);
-  }, [overlayVisible, micEnabled, locEnabled, snsEnabled]);
+  }, [micEnabled, locEnabled, snsEnabled]);
 
   const handleSOS = async () => {
     try {
@@ -650,11 +633,6 @@ export default function Dashboard() {
           onPress={() => router.push("/settings")}
         />
       </View>
-
-      <EmergencyOverlay
-        visible={overlayVisible}
-        onCancel={handleCancelListening}
-      />
 
     </View>
   );

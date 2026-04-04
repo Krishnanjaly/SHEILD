@@ -1857,14 +1857,14 @@ export default function EmergencyMonitor() {
         ) {
             lastVolumePressRef.current = [];
             volumeHistory.current = [];
-            console.log('VOLUME BUTTON TRIGGER - AI ANALYSIS ACTIVATED');
-            runMotionAnalysisSequence(undefined, 'VOLUME').catch((error) => {
-                console.log('Volume-triggered AI analysis error:', error);
+            console.log('VOLUME BUTTON TRIGGER - VOICE LISTENING ACTIVATED');
+            activateEmergencyListening().catch((error) => {
+                console.log('Volume-triggered voice listening error:', error);
             });
         }
 
         recenterVolumeForHardwareTrigger().catch(() => {});
-    }, [recenterVolumeForHardwareTrigger, runMotionAnalysisSequence]);
+    }, [activateEmergencyListening, recenterVolumeForHardwareTrigger]);
     
     const performRiskAnalysis = async (): Promise<RiskAnalysis> => {
         return await aiRiskEngine.performRiskAnalysis();
@@ -2477,7 +2477,7 @@ export default function EmergencyMonitor() {
 
 
             {/* ───── HIDDEN CAMERA VIEW (recording in background) ───── */}
-            {showCamera && (
+            {showCamera && !isListening && (
                 <Modal visible={showCamera} transparent animationType="none">
                     <View style={styles.cameraOverlay}>
                         <CameraView
@@ -2618,7 +2618,7 @@ export default function EmergencyMonitor() {
             )}
 
             {/* Contact Calling Modal */}
-            {showContactCalling && (
+            {showContactCalling && !isListening && (
                 <Modal
                     transparent={true}
                     animationType="fade"

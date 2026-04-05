@@ -75,6 +75,10 @@ export default function Settings() {
         }
         if (storedStealthMode !== null) {
             setStealthMode(storedStealthMode === "true");
+            if (storedStealthMode === "true") {
+                setAutoSiren(false);
+                setLoopAudio(false);
+            }
         }
         setIsAppLockEnabled(appLockState.isAppLockEnabled);
         setLockType(appLockState.lockType);
@@ -122,12 +126,18 @@ export default function Settings() {
     };
 
     const handleAutoSirenToggle = async (value: boolean) => {
+        if (stealthMode && value) {
+            return;
+        }
         setAutoSiren(value);
         await AsyncStorage.setItem("AUTO_SIREN_ENABLED", value.toString());
         DeviceEventEmitter.emit("STATUS_TOGGLE_CHANGED");
     };
 
     const handleLoopAudioToggle = async (value: boolean) => {
+        if (stealthMode && value) {
+            return;
+        }
         setLoopAudio(value);
         await AsyncStorage.setItem("LOOP_AUDIO_ENABLED", value.toString());
         DeviceEventEmitter.emit("STATUS_TOGGLE_CHANGED");
@@ -135,7 +145,17 @@ export default function Settings() {
 
     const handleStealthModeToggle = async (value: boolean) => {
         setStealthMode(value);
-        await AsyncStorage.setItem("STEALTH_MODE_ENABLED", value.toString());
+        if (value) {
+            setAutoSiren(false);
+            setLoopAudio(false);
+            await AsyncStorage.multiSet([
+                ["STEALTH_MODE_ENABLED", "true"],
+                ["AUTO_SIREN_ENABLED", "false"],
+                ["LOOP_AUDIO_ENABLED", "false"],
+            ]);
+        } else {
+            await AsyncStorage.setItem("STEALTH_MODE_ENABLED", "false");
+        }
         DeviceEventEmitter.emit("STATUS_TOGGLE_CHANGED");
     };
 
@@ -317,6 +337,11 @@ export default function Settings() {
                         value={stealthMode}
                         onValueChange={handleStealthModeToggle}
                     />
+                    {stealthMode && (
+                        <Text style={styles.helperText}>
+                            Stealth mode overrides all feedback and forces siren and loop audio off.
+                        </Text>
+                    )}
                 </Section>
 
                 <Text style={styles.footer}>

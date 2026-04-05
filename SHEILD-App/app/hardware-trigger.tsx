@@ -60,6 +60,26 @@ export default function HardwareTrigger() {
         loadPatternLabel();
     }, []));
 
+    const handleEnabledToggle = useCallback(async (value: boolean) => {
+        try {
+            await AsyncStorage.setItem(VOLUME_TRIGGER_ENABLED_KEY, value.toString());
+            setEnabled(value);
+            DeviceEventEmitter.emit("STATUS_TOGGLE_CHANGED");
+
+            const userId = await AsyncStorage.getItem("userId");
+            if (userId) {
+                await ProfileService.saveHardwareTrigger(
+                    userId,
+                    value,
+                    "custom_pattern"
+                );
+            }
+        } catch (error) {
+            console.log("Failed to update hardware trigger enabled state:", error);
+            Alert.alert("Update Failed", "Unable to update hardware trigger setting");
+        }
+    }, []);
+
     const handleSaveConfiguration = useCallback(async () => {
         try {
             const rawPattern = await AsyncStorage.getItem(VOLUME_PATTERN_STORAGE_KEY);
@@ -69,10 +89,9 @@ export default function HardwareTrigger() {
                 : DEFAULT_PATTERN;
 
             await AsyncStorage.multiSet([
-                [VOLUME_TRIGGER_ENABLED_KEY, "true"],
+                [VOLUME_TRIGGER_ENABLED_KEY, enabled.toString()],
                 [ACTIVE_VOLUME_PATTERN_STORAGE_KEY, JSON.stringify(nextPattern)],
             ]);
-            setEnabled(true);
 
             DeviceEventEmitter.emit("STATUS_TOGGLE_CHANGED");
 
@@ -80,7 +99,7 @@ export default function HardwareTrigger() {
             if (userId) {
                 await ProfileService.saveHardwareTrigger(
                     userId,
-                    true,
+                    enabled,
                     nextPattern.join("-").toLowerCase()
                 );
             }
@@ -148,7 +167,7 @@ export default function HardwareTrigger() {
 
                     <Switch
                         value={enabled}
-                        onValueChange={setEnabled}
+                        onValueChange={handleEnabledToggle}
                         trackColor={{ true: "#EC1313" }}
                         thumbColor="#fff"
                     />

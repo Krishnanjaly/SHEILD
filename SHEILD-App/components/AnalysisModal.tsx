@@ -5,6 +5,7 @@ import { MaterialIcons } from "@expo/vector-icons";
 
 interface AnalysisModalProps {
   visible: boolean;
+  stealthEnabled?: boolean;
   progress: number;
   result: "LOW" | "HIGH" | null;
   subtitle?: string;
@@ -14,12 +15,17 @@ interface AnalysisModalProps {
 
 export default function AnalysisModal({
   visible,
+  stealthEnabled = false,
   progress,
   result,
   subtitle,
   resultMessage,
   explanations = [],
 }: AnalysisModalProps) {
+  if (stealthEnabled) {
+    return null;
+  }
+
   const isComplete = result !== null;
   const isHighRisk = result === "HIGH";
   const title = isComplete

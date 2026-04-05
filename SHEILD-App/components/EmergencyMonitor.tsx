@@ -105,6 +105,9 @@ export default function EmergencyMonitor() {
     const shakeSamplesRef = useRef<Array<{ timestamp: number; accelerationMagnitude: number; rotationMagnitude: number }>>([]);
     const shakeDetectionEnabledRef = useRef(true);
     const shakeSensitivityRef = useRef(0.5);
+    const autoSirenEnabledRef = useRef(true);
+    const loopAlertAudioEnabledRef = useRef(false);
+    const stealthModeEnabledRef = useRef(false);
     const analysisReadyRef = useRef(true);
     const lastCombinedAnalysisAtRef = useRef(0);
 
@@ -224,12 +227,18 @@ export default function EmergencyMonitor() {
 
     const refreshVolumeTriggerState = useCallback(async () => {
         try {
-            const [enabled, activePattern, draftPattern] = await Promise.all([
+            const [enabled, activePattern, draftPattern, stealthEnabled, autoSirenEnabled, loopAlertAudioEnabled] = await Promise.all([
                 AsyncStorage.getItem("VOLUME_TRIGGER_ENABLED"),
                 AsyncStorage.getItem("ACTIVE_VOLUME_PATTERN"),
                 AsyncStorage.getItem("volumePattern"),
+                AsyncStorage.getItem("STEALTH_MODE_ENABLED"),
+                AsyncStorage.getItem("AUTO_SIREN_ENABLED"),
+                AsyncStorage.getItem("LOOP_AUDIO_ENABLED"),
             ]);
             volumeTriggerEnabledRef.current = enabled === "true";
+            stealthModeEnabledRef.current = stealthEnabled === "true";
+            autoSirenEnabledRef.current = autoSirenEnabled !== "false";
+            loopAlertAudioEnabledRef.current = loopAlertAudioEnabled === "true";
             const storedPattern = activePattern || draftPattern;
             if (storedPattern) {
                 try {
@@ -250,6 +259,8 @@ export default function EmergencyMonitor() {
             if (!volumeTriggerEnabledRef.current) {
                 lastVolumePressRef.current = [];
                 volumeHistory.current = [];
+            } else {
+                recenterVolumeForHardwareTrigger().catch(() => {});
             }
         } catch (error) {
             console.log("Failed to read volume trigger setting:", error);
@@ -277,7 +288,7 @@ export default function EmergencyMonitor() {
         } finally {
             setTimeout(() => {
                 isRecenteringVolumeRef.current = false;
-            }, 180);
+            }, 60);
         }
     }, []);
 
@@ -683,7 +694,7 @@ export default function EmergencyMonitor() {
             clearInterval(analysisProgressIntervalRef.current);
             analysisProgressIntervalRef.current = null;
         }
-    }, []);
+    }, [recenterVolumeForHardwareTrigger]);
 
     useEffect(() => {
         cameraFacingRef.current = cameraFacing;
@@ -709,14 +720,34 @@ export default function EmergencyMonitor() {
     };
 
     const speakRiskAlert = useCallback(async (riskLevel: 'LOW' | 'HIGH', reason?: string | null) => {
+        if (stealthModeEnabledRef.current || !autoSirenEnabledRef.current) {
+            return;
+        }
         try {
             const message = RiskAnalysisService.getVoiceAlertMessage(riskLevel, reason);
             await Speech.stop();
-            Speech.speak(message, {
-                language: 'en-US',
-                rate: 0.95,
-                pitch: 1,
-            });
+            const repeatCount = loopAlertAudioEnabledRef.current ? 5 : 1;
+
+            for (let index = 0; index < repeatCount; index += 1) {
+                await new Promise<void>((resolve) => {
+                    let settled = false;
+                    const finish = () => {
+                        if (!settled) {
+                            settled = true;
+                            resolve();
+                        }
+                    };
+
+                    Speech.speak(message, {
+                        language: 'en-US',
+                        rate: 0.95,
+                        pitch: 1,
+                        onDone: finish,
+                        onStopped: finish,
+                        onError: finish,
+                    });
+                });
+            }
         } catch (error) {
             console.log('Risk voice alert failed:', error);
         }
@@ -1610,6 +1641,11 @@ export default function EmergencyMonitor() {
     };
 
     const handleLowRisk = () => {
+        if (stealthModeEnabledRef.current) {
+            console.log("Stealth mode active. Logging low risk silently.");
+            return;
+        }
+
         if (listeningRef.current) {
             setShowLowWarning(false);
             lowRiskSequenceRef.current = true;
@@ -1767,6 +1803,20 @@ export default function EmergencyMonitor() {
         }
 
         console.log("🔴 HIGH RISK KEYWORD DETECTED");
+        if (stealthModeEnabledRef.current) {
+            isCancelledRef.current = false;
+            setIsEmergencyActive(true);
+            highRiskSequenceRef.current = true;
+            executeHighRiskSequence()
+                .catch((error) => {
+                    console.error("Silent high risk workflow error:", error);
+                })
+                .finally(() => {
+                    highRiskSequenceRef.current = false;
+                });
+            return;
+        }
+
         isCancelledRef.current = false;
         setIsEmergencyActive(true);
         setShowAiRiskAlert(false);
@@ -2072,7 +2122,7 @@ export default function EmergencyMonitor() {
 
         const now = Date.now();
         lastVolumePressRef.current.push(now);
-        const patternWindowMs = Math.max(1800, activeVolumePatternRef.current.length * 700);
+        const patternWindowMs = Math.max(2500, activeVolumePatternRef.current.length * 1000);
         lastVolumePressRef.current = lastVolumePressRef.current.filter((t) => now - t < patternWindowMs);
 
         const direction: 'up' | 'down' = delta > 0 ? 'up' : 'down';
@@ -2154,6 +2204,22 @@ export default function EmergencyMonitor() {
             statusText: "User is in Danger",
             riskLevel: 'HIGH',
         }).catch(() => {});
+        if (stealthModeEnabledRef.current) {
+            setIsEmergencyActive(true);
+            setAiRiskLevel('HIGH');
+            setAiConfidence(analysis.confidence);
+            setAiRiskTriggers(analysis.triggers);
+            highRiskSequenceRef.current = true;
+            triggeredKeywordRef.current = `AI Detection: ${analysis.triggers.join(', ')}`;
+            executeHighRiskSequence()
+                .catch((error) => {
+                    console.error("Silent AI high risk workflow error:", error);
+                })
+                .finally(() => {
+                    highRiskSequenceRef.current = false;
+                });
+            return;
+        }
         setIsEmergencyActive(true);
         setShowAiRiskAlert(true);
         setShowHighWarning(true);
@@ -2203,6 +2269,22 @@ export default function EmergencyMonitor() {
         }
     ) => {
         if (isEmergencyActive || showLowWarning || isCancelledRef.current) return;
+
+        if (stealthModeEnabledRef.current) {
+            console.log('Stealth mode active. Low risk logged silently.');
+            ActivityService.logActivity(`AI_RISK_DETECTED_LOW: ${analysis.triggers.join(', ')}`, currentEmergencyId);
+            updateGuardianAnalysisUi({
+                isAnalyzing: false,
+                detectedMovement,
+                progress: 100,
+                statusText: "Risk evaluation completed",
+                riskLevel: 'LOW',
+            }).catch(() => {});
+            setAiRiskLevel('LOW');
+            setAiConfidence(analysis.confidence);
+            setAiRiskTriggers(analysis.triggers);
+            return;
+        }
 
         if (!options?.skipVoiceAlert) {
             await speakRiskAlert(
@@ -2627,7 +2709,7 @@ export default function EmergencyMonitor() {
     return (
         <>
             {/* ───── BACKGROUND MODE STATUS INDICATOR ───── */}
-            {isBackgroundMode && (
+            {isBackgroundMode && !stealthModeEnabledRef.current && (
                 <View style={styles.backgroundStatusIndicator}>
                     <View style={styles.backgroundStatusDot} />
                     <Text style={styles.backgroundStatusText}>🔴 Background Monitoring Active</Text>
@@ -2636,7 +2718,7 @@ export default function EmergencyMonitor() {
             )}
 
             {/* ───── AI RISK STATUS INDICATOR ───── */}
-            {aiRiskLevel !== 'NONE' && !isListening && (
+            {aiRiskLevel !== 'NONE' && !isListening && !stealthModeEnabledRef.current && (
                 <View style={[styles.aiRiskIndicator, aiRiskLevel === 'HIGH' ? styles.aiRiskHigh : styles.aiRiskLow]}>
                     <MaterialIcons 
                         name={aiRiskLevel === 'HIGH' ? "warning" : "info"} 
@@ -2650,7 +2732,8 @@ export default function EmergencyMonitor() {
             )}
 
             <AnalysisModal
-                visible={isAnalyzing && !isListening}
+                visible={isAnalyzing && !isListening && !stealthModeEnabledRef.current}
+                stealthEnabled={stealthModeEnabledRef.current}
                 progress={analysisProgress}
                 result={analysisResult}
                 subtitle={analysisStatusText}
@@ -2658,14 +2741,14 @@ export default function EmergencyMonitor() {
                 explanations={analysisExplanations}
             />
 
-            {isEmergencyActive && !isListening && (
+            {isEmergencyActive && !isListening && !stealthModeEnabledRef.current && (
                 <View style={styles.emergencyModeBanner}>
                     <MaterialIcons name="warning" size={16} color="#fff" />
                     <Text style={styles.emergencyModeBannerText}>Emergency Mode Active</Text>
                 </View>
             )}
 
-            <Modal visible={isListening} transparent animationType="fade">
+            <Modal visible={isListening && !stealthModeEnabledRef.current} transparent animationType="fade">
                 <View style={styles.modalOverlay}>
                     <View style={[styles.modalContent, styles.listeningContent]}>
                         <View style={styles.listeningIconWrap}>
@@ -2685,7 +2768,7 @@ export default function EmergencyMonitor() {
             </Modal>
 
             {/* ───── LOW RISK WARNING MODAL ───── */}
-            <Modal visible={showLowWarning && !isListening} transparent animationType="fade">
+            <Modal visible={showLowWarning && !isListening && !stealthModeEnabledRef.current} transparent animationType="fade">
                 <View style={styles.modalOverlay}>
                     <View style={styles.modalContent}>
                         <View style={styles.warningIconWrap}>
@@ -2705,7 +2788,7 @@ export default function EmergencyMonitor() {
             </Modal>
 
             {/* ───── HIGH RISK WARNING MODAL ───── */}
-            <Modal visible={showHighWarning && !isListening} transparent animationType="slide">
+            <Modal visible={showHighWarning && !isListening && !stealthModeEnabledRef.current} transparent animationType="slide">
                 <View style={styles.modalOverlay}>
                     <LinearGradient
                         colors={['#2a0f0f', '#1a0505']}

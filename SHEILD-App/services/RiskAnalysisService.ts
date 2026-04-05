@@ -154,4 +154,21 @@ export const RiskAnalysisService = {
       matchedKeyword: riskResult.matchedKeyword,
     };
   },
+
+  getVoiceAlertMessage(
+    riskLevel: "LOW" | "HIGH",
+    reason?: string | null
+  ) {
+    const normalizedReason = reason?.trim();
+
+    if (riskLevel === "HIGH") {
+      return normalizedReason
+        ? `High risk detected. ${normalizedReason}. Starting emergency recording`
+        : "High risk detected. Starting emergency recording";
+    }
+
+    return normalizedReason
+      ? `Low risk detected. ${normalizedReason}`
+      : "Low risk detected";
+  },
 };

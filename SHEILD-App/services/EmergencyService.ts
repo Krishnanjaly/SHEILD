@@ -1,6 +1,4 @@
 import BASE_URL from "../config/api";
-import * as SMS from "expo-sms";
-import { NativeModules, PermissionsAndroid, Platform } from "react-native";
 
 type TrustedContact = {
     trusted_id?: number | string;
@@ -10,12 +8,6 @@ type TrustedContact = {
     user_id?: string;
     latitude?: string | number;
     longitude?: string | number;
-};
-
-const { AutoSmsModule } = NativeModules as {
-    AutoSmsModule?: {
-        sendSms: (phoneNumber: string, message: string) => Promise<boolean>;
-    };
 };
 
 function normalizeLocationUrl(locationUrl: string) {
@@ -162,50 +154,7 @@ export const EmergencyService = {
     }) {
         try {
             const contacts = params.contacts ?? await this.getTrustedContacts(params.userId);
-            const numbers = contacts
-                .map((contact) => contact.trusted_no?.trim())
-                .filter((value): value is string => Boolean(value));
-
-            if (numbers.length === 0) {
-                return contacts;
-            }
-
-            const smsAvailable = await SMS.isAvailableAsync();
-            if (!smsAvailable) {
-                console.log("SMS is not available on this device.");
-                return contacts;
-            }
-
-            const liveLocation = normalizeLocationUrl(params.locationUrl);
-            const message = [
-                `SHEILD ${params.riskLevel} ALERT`,
-                `Trigger: ${params.keyword || "Emergency"}`,
-                `Live Location: ${liveLocation}`,
-            ].join("\n");
-
-            let sent = false;
-            if (Platform.OS === "android" && AutoSmsModule) {
-                const granted = await PermissionsAndroid.request(
-                    PermissionsAndroid.PERMISSIONS.SEND_SMS
-                );
-
-                if (granted === PermissionsAndroid.RESULTS.GRANTED) {
-                    for (const number of numbers) {
-                        await AutoSmsModule.sendSms(number, message);
-                    }
-                    sent = true;
-                } else {
-                    console.log("SEND_SMS permission denied.");
-                }
-            } else {
-                const result = await SMS.sendSMSAsync(numbers, message);
-                sent = result.result !== "cancelled";
-            }
-
-            if (params.emergencyId && sent) {
-                await this.logAlert(params.emergencyId, "sms");
-            }
-
+            console.log("Trusted contact SMS alerts are disabled. Email-only alert flow is active.");
             return contacts;
         } catch (e) {
             console.error("Error sending trusted contact alerts:", e);

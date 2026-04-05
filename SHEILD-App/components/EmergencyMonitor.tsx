@@ -1,5 +1,6 @@
 import React, { useEffect, useState, useRef, useCallback } from 'react';
 import { useSpeechRecognitionEvent } from 'expo-speech-recognition';
+import * as Speech from 'expo-speech';
 import { Accelerometer } from 'expo-sensors';
 import {
     View, Alert, DeviceEventEmitter, Platform, PermissionsAndroid,
@@ -36,6 +37,7 @@ import { RiskAnalysisService } from '../services/RiskAnalysisService';
 import { AudioCaptureService } from '../services/AudioCaptureService';
 import { HuggingFaceService } from '../services/HuggingFaceService';
 import { GuardianLogService } from '../services/GuardianLogService';
+import { RecordingService } from '../services/RecordingService';
 import {
     classifyVoiceError,
     ensureVoicePermission,
@@ -174,6 +176,7 @@ export default function EmergencyMonitor() {
     const [currentCallContact, setCurrentCallContact] = useState('');
     const [showActiveCallCountdown, setShowActiveCallCountdown] = useState(false);
     const [activeCallCountdown, setActiveCallCountdown] = useState(15);
+    const recordingSessionIdRef = useRef<string | null>(null);
 
     useSpeechRecognitionEvent("result", (event) => {
         const transcripts =
@@ -705,6 +708,41 @@ export default function EmergencyMonitor() {
             : "Alerting contacts silently";
     };
 
+    const speakRiskAlert = useCallback(async (riskLevel: 'LOW' | 'HIGH', reason?: string | null) => {
+        try {
+            const message = RiskAnalysisService.getVoiceAlertMessage(riskLevel, reason);
+            await Speech.stop();
+            Speech.speak(message, {
+                language: 'en-US',
+                rate: 0.95,
+                pitch: 1,
+            });
+        } catch (error) {
+            console.log('Risk voice alert failed:', error);
+        }
+    }, []);
+
+    const finishRecordingSession = () => {
+        if (recordingSessionIdRef.current) {
+            RecordingService.endSession(recordingSessionIdRef.current);
+            recordingSessionIdRef.current = null;
+        }
+    };
+
+    const beginHighRiskRecording = async (emergencyIdOverride?: number) => {
+        if (!recordingSessionIdRef.current) {
+            const nextSessionId = `emergency-${emergencyIdOverride ?? currentEmergencyIdRef.current ?? Date.now()}`;
+            const started = RecordingService.startSession(nextSessionId);
+            if (!started) {
+                console.log("Recording session already active. Skipping duplicate high risk recording.");
+                return;
+            }
+            recordingSessionIdRef.current = nextSessionId;
+        }
+
+        await startHighRiskRecording(emergencyIdOverride);
+    };
+
     const getShakeThresholdFromSensitivity = useCallback((sensitivity: number) => {
         const normalizedSensitivity = Math.min(1, Math.max(0, sensitivity));
         return 2.25 - normalizedSensitivity * 0.9;
@@ -859,6 +897,7 @@ export default function EmergencyMonitor() {
 
         const [result] = await Promise.all([analysisPromise, progressPromise]);
         const confidence = result.finalScore / 100;
+        const primaryReason = result.explanations[0] || result.triggers[0] || null;
 
         triggeredKeywordRef.current =
             result.matchedKeyword ||
@@ -870,6 +909,7 @@ export default function EmergencyMonitor() {
         setAiConfidence(confidence);
         setAiRiskTriggers(result.triggers);
         setAnalysisStatusText(result.summary);
+        await speakRiskAlert(result.riskLevel, primaryReason);
 
         await updateGuardianAnalysisUi({
             isAnalyzing: false,
@@ -910,7 +950,10 @@ export default function EmergencyMonitor() {
                 return;
             }
 
-            triggerLowRiskAiAlert(workflowAnalysis);
+            triggerLowRiskAiAlert(workflowAnalysis, {
+                skipVoiceAlert: true,
+                reason: primaryReason,
+            });
         }, 2500);
     }, [
         clearAiAnalysisProgress,
@@ -1815,7 +1858,7 @@ export default function EmergencyMonitor() {
             return;
         }
 
-        await startHighRiskRecording(emergencyId ?? undefined);
+        await beginHighRiskRecording(emergencyId ?? undefined);
         await emailTask;
     };
 
@@ -1851,6 +1894,7 @@ export default function EmergencyMonitor() {
         stopVideoRecording();
         console.log("🎤 Stopping audio recording...");
         stopAudioRecording();
+        finishRecordingSession();
         setIsRecording(false);
         
         // Stop the call rotation
@@ -1963,6 +2007,7 @@ export default function EmergencyMonitor() {
         // Cancel any ongoing recording
         stopVideoRecording();
         stopAudioRecording();
+        finishRecordingSession();
         setIsRecording(false);
         setIsEmergencyActive(false);
         setAiRiskLevel('NONE');
@@ -2150,8 +2195,21 @@ export default function EmergencyMonitor() {
         }, 10000);
     };
     
-    const triggerLowRiskAiAlert = (analysis: RiskAnalysis | { riskLevel: 'LOW'; confidence: number; triggers: string[]; sensorData: SensorData }) => {
+    const triggerLowRiskAiAlert = async (
+        analysis: RiskAnalysis | { riskLevel: 'LOW'; confidence: number; triggers: string[]; sensorData: SensorData },
+        options?: {
+            skipVoiceAlert?: boolean;
+            reason?: string | null;
+        }
+    ) => {
         if (isEmergencyActive || showLowWarning || isCancelledRef.current) return;
+
+        if (!options?.skipVoiceAlert) {
+            await speakRiskAlert(
+                'LOW',
+                options?.reason || analysis.triggers[0] || 'Minor movement detected'
+            );
+        }
         
         console.log('⚠️ AI LOW RISK ALERT');
         ActivityService.logActivity(`AI_RISK_DETECTED_LOW: ${analysis.triggers.join(', ')}`, currentEmergencyId);
@@ -2402,6 +2460,7 @@ export default function EmergencyMonitor() {
             videoRecordingRef.current = false;
             setIsRecording(false);
             setShowCamera(false);
+            finishRecordingSession();
         }
     };
 
@@ -2426,6 +2485,7 @@ export default function EmergencyMonitor() {
             } finally {
                 audioRecordingRef.current = null;
                 setIsRecording(false);
+                finishRecordingSession();
             }
         }
     };

@@ -1,5 +1,6 @@
 const nodemailer = require("nodemailer");
 const dns = require("dns");
+const net = require("net");
 const { Resend } = require("resend");
 
 dns.setDefaultResultOrder("ipv4first");
@@ -28,6 +29,25 @@ const hasGenericSmtpConfig = () =>
       process.env.SMTP_PASS
   );
 
+const createIpv4Socket = (options, callback) => {
+  dns.lookup(options.host, { family: 4 }, (lookupError, address) => {
+    if (lookupError) {
+      callback(lookupError);
+      return;
+    }
+
+    const socket = net.connect({
+      host: address,
+      port: options.port,
+      family: 4,
+    });
+
+    callback(null, {
+      connection: socket,
+    });
+  });
+};
+
 const createTransporter = () => {
   if (hasGenericSmtpConfig()) {
     const secure =
@@ -43,6 +63,7 @@ const createTransporter = () => {
           pass: process.env.SMTP_PASS,
         },
         family: 4,
+        getSocket: createIpv4Socket,
         tls: {
           rejectUnauthorized: false,
         },

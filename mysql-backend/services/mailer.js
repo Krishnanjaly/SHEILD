@@ -15,30 +15,68 @@ const normalizeRecipients = (value) => {
 const resolveFromAddress = (from) => {
   if (from) return from;
   if (process.env.MAIL_FROM) return process.env.MAIL_FROM;
+  if (process.env.SMTP_USER) return `"SHEILD Guardian" <${process.env.SMTP_USER}>`;
   if (process.env.EMAIL_USER) return `"SHEILD Guardian" <${process.env.EMAIL_USER}>`;
   return "SHEILD Guardian <onboarding@resend.dev>";
 };
 
-const createTransporter = () =>
-  nodemailer.createTransport({
-    service: "gmail",
-    host: "smtp.gmail.com",
-    port: 587,
-    secure: false,
-    auth: {
-      user: process.env.EMAIL_USER,
-      pass: process.env.EMAIL_PASS,
-    },
-    family: 4,
-    tls: {
-      rejectUnauthorized: false,
-    },
-    connectionTimeout: 20000,
-    greetingTimeout: 20000,
-    socketTimeout: 20000,
-  });
+const hasGenericSmtpConfig = () =>
+  Boolean(
+    process.env.SMTP_HOST &&
+      process.env.SMTP_PORT &&
+      process.env.SMTP_USER &&
+      process.env.SMTP_PASS
+  );
 
-const transporter = createTransporter();
+const createTransporter = () => {
+  if (hasGenericSmtpConfig()) {
+    const secure =
+      process.env.SMTP_SECURE === "true" || Number(process.env.SMTP_PORT) === 465;
+
+    return {
+      transporter: nodemailer.createTransport({
+        host: process.env.SMTP_HOST,
+        port: Number(process.env.SMTP_PORT),
+        secure,
+        auth: {
+          user: process.env.SMTP_USER,
+          pass: process.env.SMTP_PASS,
+        },
+        family: 4,
+        tls: {
+          rejectUnauthorized: false,
+        },
+        connectionTimeout: 20000,
+        greetingTimeout: 20000,
+        socketTimeout: 20000,
+      }),
+      provider: "smtp_custom",
+    };
+  }
+
+  return {
+    transporter: nodemailer.createTransport({
+      service: "gmail",
+      host: "smtp.gmail.com",
+      port: 587,
+      secure: false,
+      auth: {
+        user: process.env.EMAIL_USER,
+        pass: process.env.EMAIL_PASS,
+      },
+      family: 4,
+      tls: {
+        rejectUnauthorized: false,
+      },
+      connectionTimeout: 20000,
+      greetingTimeout: 20000,
+      socketTimeout: 20000,
+    }),
+    provider: "gmail_smtp",
+  };
+};
+
+const { transporter, provider: smtpProvider } = createTransporter();
 const resend =
   process.env.RESEND_API_KEY && process.env.RESEND_API_KEY.trim()
     ? new Resend(process.env.RESEND_API_KEY.trim())
@@ -61,6 +99,10 @@ const assertMailConfig = () => {
     return;
   }
 
+  if (hasGenericSmtpConfig()) {
+    return;
+  }
+
   if (!process.env.EMAIL_USER || !process.env.EMAIL_PASS) {
     const error = new Error("Email credentials are missing on the backend");
     error.code = "MAIL_CONFIG_MISSING";
@@ -79,7 +121,7 @@ const sendMail = async ({ to, from, ...mailOptions }) => {
   }
 
   const fromAddress = resolveFromAddress(from);
-  const provider = resend ? "resend" : "gmail_smtp";
+  const provider = resend ? "resend" : smtpProvider;
 
   mailDebug("Preparing outbound mail", {
     provider,

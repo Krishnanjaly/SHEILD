@@ -1893,17 +1893,14 @@ export default function EmergencyMonitor() {
         ) {
             lastVolumePressRef.current = [];
             volumeHistory.current = [];
-            console.log('VOLUME BUTTON TRIGGER - AI ANALYSIS ACTIVATED');
-            runMotionAnalysisSequence({
-                triggerSource: 'VOLUME',
-                detectedLabel: 'Volume button trigger detected',
-            }).catch((error) => {
-                console.log('Volume-triggered AI analysis error:', error);
+            console.log('VOLUME BUTTON TRIGGER - VOICE LISTENING ACTIVATED');
+            activateEmergencyListening().catch((error) => {
+                console.log('Volume-triggered voice listening error:', error);
             });
         }
 
         recenterVolumeForHardwareTrigger().catch(() => {});
-    }, [recenterVolumeForHardwareTrigger, runMotionAnalysisSequence]);
+    }, [activateEmergencyListening, recenterVolumeForHardwareTrigger]);
     
     const performRiskAnalysis = async (): Promise<RiskAnalysis> => {
         return await aiRiskEngine.performRiskAnalysis();

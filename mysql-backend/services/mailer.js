@@ -1,5 +1,6 @@
 const nodemailer = require("nodemailer");
 const dns = require("dns");
+const { Resend } = require("resend");
 
 dns.setDefaultResultOrder("ipv4first");
 
@@ -9,6 +10,13 @@ const normalizeRecipients = (value) => {
     .map((item) => String(item || "").trim().toLowerCase())
     .filter(Boolean)
     .filter((item, index, array) => array.indexOf(item) === index);
+};
+
+const resolveFromAddress = (from) => {
+  if (from) return from;
+  if (process.env.MAIL_FROM) return process.env.MAIL_FROM;
+  if (process.env.EMAIL_USER) return `"SHEILD Guardian" <${process.env.EMAIL_USER}>`;
+  return "SHEILD Guardian <onboarding@resend.dev>";
 };
 
 const createTransporter = () =>
@@ -31,8 +39,16 @@ const createTransporter = () =>
   });
 
 const transporter = createTransporter();
+const resend =
+  process.env.RESEND_API_KEY && process.env.RESEND_API_KEY.trim()
+    ? new Resend(process.env.RESEND_API_KEY.trim())
+    : null;
 
 const assertMailConfig = () => {
+  if (resend) {
+    return;
+  }
+
   if (!process.env.EMAIL_USER || !process.env.EMAIL_PASS) {
     const error = new Error("Email credentials are missing on the backend");
     error.code = "MAIL_CONFIG_MISSING";
@@ -50,8 +66,28 @@ const sendMail = async ({ to, from, ...mailOptions }) => {
     throw error;
   }
 
+  const fromAddress = resolveFromAddress(from);
+
+  if (resend) {
+    const { data, error } = await resend.emails.send({
+      from: fromAddress,
+      to: recipients,
+      subject: mailOptions.subject,
+      text: mailOptions.text,
+      html: mailOptions.html,
+    });
+
+    if (error) {
+      const resendError = new Error(error.message || "Resend email send failed");
+      resendError.code = "RESEND_SEND_FAILED";
+      throw resendError;
+    }
+
+    return data;
+  }
+
   return transporter.sendMail({
-    from: from || `"SHEILD Guardian" <${process.env.EMAIL_USER}>`,
+    from: fromAddress,
     to: recipients.join(","),
     ...mailOptions,
   });

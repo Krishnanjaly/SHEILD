@@ -34,6 +34,7 @@ import {
 import { RiskAnalysisService } from '../services/RiskAnalysisService';
 import { AudioCaptureService } from '../services/AudioCaptureService';
 import { HuggingFaceService } from '../services/HuggingFaceService';
+import { GuardianLogService } from '../services/GuardianLogService';
 import {
     classifyVoiceError,
     ensureVoicePermission,
@@ -60,7 +61,7 @@ const MAX_VOICE_RESTART_ATTEMPTS = 6;
 const DEFAULT_LOW_RISK_KEYWORDS = ["call me", "come later", "emergency"];
 const DEFAULT_HIGH_RISK_KEYWORDS = ["help", "danger", "save me", "help help"];
 const AI_CLASSIFICATION_POPUP_MS = 1800;
-const KEYWORD_TRIGGER_ONLY_MODE = true;
+const KEYWORD_TRIGGER_ONLY_MODE = false;
 
 const Device = { osBuildId: "mock-device-id" };
 const ReactNativeForegroundService = {
@@ -109,6 +110,7 @@ export default function EmergencyMonitor() {
     const [analysisStatusText, setAnalysisStatusText] = useState("Idle");
     const [analysisResult, setAnalysisResult] = useState<'LOW' | 'HIGH' | null>(null);
     const [analysisResultMessage, setAnalysisResultMessage] = useState("");
+    const [analysisExplanations, setAnalysisExplanations] = useState<string[]>([]);
     const [isEmergencyActive, setIsEmergencyActive] = useState(false);
     const [abnormalMovementPopup, setAbnormalMovementPopup] = useState<{
         visible: boolean;
@@ -654,9 +656,9 @@ export default function EmergencyMonitor() {
     }, []);
 
     const getAnalysisStatusText = (progressValue: number) => {
-        if (progressValue < 34) return "Analyzing motion...";
-        if (progressValue < 68) return "Analyzing audio...";
-        return "Calculating risk...";
+        if (progressValue < 34) return "Analyzing motion patterns...";
+        if (progressValue < 68) return "Analyzing audio signals...";
+        return "Evaluating risk level...";
     };
 
     const getAnalysisResultMessage = (riskLevel: 'LOW' | 'HIGH') => {
@@ -687,6 +689,7 @@ export default function EmergencyMonitor() {
         setAnalysisStatusText("Idle");
         setAnalysisResult(null);
         setAnalysisResultMessage("");
+        setAnalysisExplanations([]);
         setAiRiskLevel('NONE');
         setAiConfidence(0);
         setAiRiskTriggers([]);
@@ -700,10 +703,12 @@ export default function EmergencyMonitor() {
         });
     }, [clearAiAnalysisProgress, clearAnalysisCompletionTimeout, updateGuardianAnalysisUi]);
 
-    const runMotionAnalysisSequence = useCallback(async (
-        motionEvent?: SensorMotionDetectionEvent,
-        triggerSource: 'MOTION' | 'VOLUME' = 'MOTION'
-    ) => {
+    const runMotionAnalysisSequence = useCallback(async (params?: {
+        motionEvent?: SensorMotionDetectionEvent;
+        triggerSource?: 'MOTION' | 'VOLUME' | 'KEYWORD';
+        transcriptCandidates?: string[];
+        detectedLabel?: string;
+    }) => {
         if (
             isAnalyzing ||
             isEmergencyActive ||
@@ -723,17 +728,23 @@ export default function EmergencyMonitor() {
 
         clearAiAnalysisProgress();
         clearAnalysisCompletionTimeout();
+        const triggerSource = params?.triggerSource ?? 'MOTION';
+        const motionEvent = params?.motionEvent;
 
         const detectedLabel =
-            triggerSource === 'VOLUME'
-                ? 'Volume trigger detected'
-                : motionEvent?.description || 'Abnormal motion detected';
+            params?.detectedLabel ||
+            (triggerSource === 'KEYWORD'
+                ? 'Keyword trigger detected'
+                : triggerSource === 'VOLUME'
+                    ? 'Volume trigger detected'
+                    : motionEvent?.description || 'Abnormal motion detected');
 
         setDetectedMovement(detectedLabel);
         setAnalysisResult(null);
         setAnalysisResultMessage("");
+        setAnalysisExplanations([]);
         setAnalysisProgress(0);
-        setAnalysisStatusText("Analyzing motion...");
+        setAnalysisStatusText("Detecting abnormal activity...");
         setAiRiskLevel('NONE');
         setAiConfidence(0);
         setAiRiskTriggers([]);
@@ -743,7 +754,7 @@ export default function EmergencyMonitor() {
             isAnalyzing: true,
             detectedMovement: detectedLabel,
             progress: 0,
-            statusText: "Analyzing motion...",
+            statusText: "Detecting abnormal activity...",
             riskLevel: null,
         });
 
@@ -755,7 +766,7 @@ export default function EmergencyMonitor() {
             : MotionDetectionService.getRecentSamples(24);
 
         const progressPromise = new Promise<void>((resolve) => {
-            let nextProgress = 0;
+            let nextProgress = 1;
             analysisProgressIntervalRef.current = setInterval(async () => {
                 nextProgress = Math.min(100, nextProgress + 4);
                 const nextStatusText = getAnalysisStatusText(nextProgress);
@@ -795,6 +806,9 @@ export default function EmergencyMonitor() {
                     samples: motionSamples,
                     triggerType,
                     emotions: emotionResults,
+                    transcriptCandidates: params?.transcriptCandidates,
+                    lowRiskKeywords: keywordsRef.current.low,
+                    highRiskKeywords: keywordsRef.current.high,
                 },
                 Number.isFinite(configuredThreshold) ? configuredThreshold : undefined
             );
@@ -803,9 +817,12 @@ export default function EmergencyMonitor() {
         const [result] = await Promise.all([analysisPromise, progressPromise]);
         const confidence = result.finalScore / 100;
 
-        triggeredKeywordRef.current = `AI Analysis: ${result.triggers.join(", ")}`;
+        triggeredKeywordRef.current =
+            result.matchedKeyword ||
+            `AI Analysis: ${result.triggers.join(", ")}`;
         setAnalysisResult(result.riskLevel);
         setAnalysisResultMessage(getAnalysisResultMessage(result.riskLevel));
+        setAnalysisExplanations(result.explanations);
         setAiRiskLevel(result.riskLevel);
         setAiConfidence(confidence);
         setAiRiskTriggers(result.triggers);
@@ -819,8 +836,15 @@ export default function EmergencyMonitor() {
             riskLevel: result.riskLevel,
         });
 
+        await GuardianLogService.addLog({
+            eventType: result.eventType,
+            riskLevel: result.riskLevel,
+            explanations: result.explanations,
+            triggerSource,
+        });
+
         ActivityService.logActivity(
-            `AI_${triggerSource}_${result.riskLevel}: ${result.triggers.join(", ")}`
+            `AI_${triggerSource}_${result.riskLevel}: ${result.explanations.join(", ")}`
         );
 
         analysisCompletionTimeoutRef.current = setTimeout(async () => {
@@ -881,7 +905,7 @@ export default function EmergencyMonitor() {
 
         syncMotionMonitoring().catch(console.error);
         unsubscribeMotion = MotionDetectionService.subscribe((motionEvent) => {
-            runMotionAnalysisSequence(motionEvent).catch((error) => {
+            runMotionAnalysisSequence({ motionEvent, triggerSource: 'MOTION' }).catch((error) => {
                 console.error("Motion analysis sequence error:", error);
             });
         });
@@ -1277,7 +1301,13 @@ export default function EmergencyMonitor() {
             triggeredKeywordRef.current = highMatch;
             setListeningStatusText(`High keyword: ${highMatch} is detected.`);
             ActivityService.logActivity(`KEYWORD_DETECTED_HIGH: ${triggeredKeywordRef.current}`, currentEmergencyId);
-            handleHighRisk();
+            runMotionAnalysisSequence({
+                triggerSource: 'KEYWORD',
+                transcriptCandidates: candidates,
+                detectedLabel: `Keyword trigger: ${highMatch}`,
+            }).catch((error) => {
+                console.error("Keyword analysis sequence error:", error);
+            });
             closeListeningAfterKeywordMatch();
             return;
         }
@@ -1289,7 +1319,13 @@ export default function EmergencyMonitor() {
             triggeredKeywordRef.current = lowMatch;
             setListeningStatusText(`Low keyword: ${lowMatch} is detected.`);
             ActivityService.logActivity(`KEYWORD_DETECTED_LOW: ${triggeredKeywordRef.current}`, currentEmergencyId);
-            handleLowRisk();
+            runMotionAnalysisSequence({
+                triggerSource: 'KEYWORD',
+                transcriptCandidates: candidates,
+                detectedLabel: `Keyword trigger: ${lowMatch}`,
+            }).catch((error) => {
+                console.error("Keyword analysis sequence error:", error);
+            });
             closeListeningAfterKeywordMatch();
             return;
         }
@@ -1857,14 +1893,17 @@ export default function EmergencyMonitor() {
         ) {
             lastVolumePressRef.current = [];
             volumeHistory.current = [];
-            console.log('VOLUME BUTTON TRIGGER - VOICE LISTENING ACTIVATED');
-            activateEmergencyListening().catch((error) => {
-                console.log('Volume-triggered voice listening error:', error);
+            console.log('VOLUME BUTTON TRIGGER - AI ANALYSIS ACTIVATED');
+            runMotionAnalysisSequence({
+                triggerSource: 'VOLUME',
+                detectedLabel: 'Volume button trigger detected',
+            }).catch((error) => {
+                console.log('Volume-triggered AI analysis error:', error);
             });
         }
 
         recenterVolumeForHardwareTrigger().catch(() => {});
-    }, [activateEmergencyListening, recenterVolumeForHardwareTrigger]);
+    }, [recenterVolumeForHardwareTrigger, runMotionAnalysisSequence]);
     
     const performRiskAnalysis = async (): Promise<RiskAnalysis> => {
         return await aiRiskEngine.performRiskAnalysis();
@@ -2403,6 +2442,7 @@ export default function EmergencyMonitor() {
                 result={analysisResult}
                 subtitle={analysisStatusText}
                 resultMessage={analysisResultMessage}
+                explanations={analysisExplanations}
             />
 
             {isEmergencyActive && !isListening && (

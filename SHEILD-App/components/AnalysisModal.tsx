@@ -9,6 +9,7 @@ interface AnalysisModalProps {
   result: "LOW" | "HIGH" | null;
   subtitle?: string;
   resultMessage?: string;
+  explanations?: string[];
 }
 
 export default function AnalysisModal({
@@ -17,6 +18,7 @@ export default function AnalysisModal({
   result,
   subtitle,
   resultMessage,
+  explanations = [],
 }: AnalysisModalProps) {
   const isComplete = result !== null;
   const isHighRisk = result === "HIGH";
@@ -72,6 +74,21 @@ export default function AnalysisModal({
           </View>
 
           <Text style={styles.percentText}>{Math.round(progress)}%</Text>
+
+          {isComplete && explanations.length > 0 ? (
+            <View style={styles.reasonPanel}>
+              {explanations.map((reason) => (
+                <View key={reason} style={styles.reasonRow}>
+                  <MaterialIcons
+                    name={isHighRisk ? "priority-high" : "check-circle"}
+                    size={18}
+                    color={isHighRisk ? "#ff8b8b" : "#ffd166"}
+                  />
+                  <Text style={styles.reasonText}>{reason}</Text>
+                </View>
+              ))}
+            </View>
+          ) : null}
         </LinearGradient>
       </View>
     </Modal>
@@ -154,5 +171,26 @@ const styles = StyleSheet.create({
     fontSize: 34,
     fontWeight: "800",
     marginTop: 22,
+  },
+  reasonPanel: {
+    width: "100%",
+    marginTop: 22,
+    gap: 10,
+    padding: 16,
+    borderRadius: 20,
+    backgroundColor: "rgba(255,255,255,0.05)",
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.08)",
+  },
+  reasonRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+  },
+  reasonText: {
+    color: "#f3eaea",
+    flex: 1,
+    fontSize: 14,
+    lineHeight: 20,
   },
 });

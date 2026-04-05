@@ -1,25 +1,5 @@
-const nodemailer = require("nodemailer");
 const db = require("../config/db");
-const dns = require("dns");
-
-dns.setDefaultResultOrder("ipv4first");
-
-const transporter = nodemailer.createTransport({
-  host: "smtp.gmail.com",
-  port: 587,
-  secure: false,
-  auth: {
-    user: process.env.EMAIL_USER,
-    pass: process.env.EMAIL_PASS,
-  },
-  family: 4,
-  tls: {
-    rejectUnauthorized: false,
-  },
-  connectionTimeout: 20000,
-  greetingTimeout: 20000,
-  socketTimeout: 20000,
-});
+const { sendMail } = require("../services/mailer");
 
 const escapeHtml = (value) =>
   String(value ?? "")
@@ -140,9 +120,8 @@ const createQrEmergency = async ({ userId, latitude, longitude }) => {
     <p><em>This alert was sent automatically after the SOS button on the QR web page was pressed.</em></p>`;
 
   if (emails.length > 0) {
-    await transporter.sendMail({
-      from: process.env.EMAIL_USER,
-      to: emails.join(","),
+    await sendMail({
+      to: emails,
       subject,
       text: emailText,
       html: emailHtml,

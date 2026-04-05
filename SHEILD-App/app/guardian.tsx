@@ -19,6 +19,10 @@ import {
     GuardianSnapshot,
     GuardianStateService,
 } from "../services/GuardianStateService";
+import {
+    GuardianLogEntry,
+    GuardianLogService,
+} from "../services/GuardianLogService";
 
 
 export default function Guardian() {
@@ -27,6 +31,7 @@ export default function Guardian() {
     const [isMonitoring, setIsMonitoring] = useState(false);
     const [isFullAnalysis, setIsFullAnalysis] = useState(false);
     const [monitoringStatus, setMonitoringStatus] = useState<GuardianMonitoringStatus>("OFF");
+    const [guardianLogs, setGuardianLogs] = useState<GuardianLogEntry[]>([]);
     const [analysisUi, setAnalysisUi] = useState<GuardianAnalysisUiState>({
         isAnalyzing: false,
         detectedMovement: null,
@@ -37,10 +42,14 @@ export default function Guardian() {
 
     useEffect(() => {
         const loadSnapshot = async () => {
-            const snapshot = await GuardianStateService.getSnapshot();
+            const [snapshot, logs] = await Promise.all([
+                GuardianStateService.getSnapshot(),
+                GuardianLogService.getLogs(),
+            ]);
             setAnalysis(snapshot.analysis);
             setMonitoringStatus(snapshot.monitoringStatus);
             setAnalysisUi(snapshot.analysisUi);
+            setGuardianLogs(logs);
             setIsMonitoring(snapshot.monitoringStatus !== "OFF");
             setIsFullAnalysis(
                 snapshot.monitoringStatus === "ACTIVE" || snapshot.monitoringStatus === "EMERGENCY"
@@ -75,6 +84,12 @@ export default function Guardian() {
                 );
             }
         );
+        const logsSub = DeviceEventEmitter.addListener(
+            "GUARDIAN_LOGS_UPDATED",
+            (logs: GuardianLogEntry[]) => {
+                setGuardianLogs(Array.isArray(logs) ? logs : []);
+            }
+        );
 
         // Check monitoring state periodically
         const interval = setInterval(() => {
@@ -85,6 +100,7 @@ export default function Guardian() {
         return () => {
             sub.remove();
             snapshotSub.remove();
+            logsSub.remove();
             unsubscribe?.();
             clearInterval(interval);
         };
@@ -233,6 +249,28 @@ export default function Guardian() {
                                 time="SECURE"
                             />
                         </>
+                    )}
+                </View>
+
+                <View style={{ marginTop: 24 }}>
+                    <Text style={styles.sectionLabel}>
+                        Guardian Event Log
+                    </Text>
+
+                    {guardianLogs.length > 0 ? (
+                        guardianLogs.map((entry) => (
+                            <Observation
+                                key={entry.id}
+                                text={`${entry.eventType} • ${entry.explanation}`}
+                                time={`${new Date(entry.timestamp).toLocaleDateString()} • ${new Date(entry.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })} • ${entry.riskLevel}`}
+                                type="alert"
+                            />
+                        ))
+                    ) : (
+                        <Observation
+                            text="No AI guardian events logged yet."
+                            time="AWAITING DETECTION"
+                        />
                     )}
                 </View>
 

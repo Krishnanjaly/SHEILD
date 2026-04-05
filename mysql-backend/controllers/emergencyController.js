@@ -1,31 +1,11 @@
 const db = require("../config/db");
-const nodemailer = require("nodemailer");
 const cloudinary = require("cloudinary").v2;
-const dns = require("dns");
-
-dns.setDefaultResultOrder("ipv4first");
+const { sendMail } = require("../services/mailer");
 
 cloudinary.config({
   cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
   api_key: process.env.CLOUDINARY_API_KEY,
   api_secret: process.env.CLOUDINARY_API_SECRET,
-});
-
-const transporter = nodemailer.createTransport({
-  host: "smtp.gmail.com",
-  port: 587,
-  secure: false,
-  auth: {
-    user: process.env.EMAIL_USER,
-    pass: process.env.EMAIL_PASS,
-  },
-  family: 4,
-  tls: {
-    rejectUnauthorized: false,
-  },
-  connectionTimeout: 20000,
-  greetingTimeout: 20000,
-  socketTimeout: 20000,
 });
 
 const getEmergencyRecipients = async (userId) => {
@@ -227,9 +207,8 @@ Device: ${device_id || "Unknown"}
         <p><strong>Recording URL:</strong> <a href="${recording_url}">${recording_url}</a></p>
         <p><strong>Device:</strong> ${device_id || "Unknown"}</p>`;
 
-      await transporter.sendMail({
-        from: process.env.EMAIL_USER,
-        to: recipients.join(","),
+      await sendMail({
+        to: recipients,
         subject,
         text,
         html,

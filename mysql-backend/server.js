@@ -62,24 +62,8 @@ app.get("/generate-signature", (req, res) => {
   });
 });
 
-const nodemailer = require("nodemailer");
 const { sendSafeEmail } = require("./services/alertService");
-const transporter = nodemailer.createTransport({
-  host: "smtp.gmail.com",
-  port: 587,
-  secure: false,
-  auth: {
-    user: process.env.EMAIL_USER,
-    pass: process.env.EMAIL_PASS,
-  },
-  family: 4,
-  tls: {
-    rejectUnauthorized: false,
-  },
-  connectionTimeout: 20000,
-  greetingTimeout: 20000,
-  socketTimeout: 20000,
-});
+const { sendMail, assertMailConfig } = require("./services/mailer");
 
 app.post("/send-sos", async (req, res) => {
   try {
@@ -145,12 +129,7 @@ app.post("/send-sos", async (req, res) => {
       return res.json({ success: true, message: "No trusted emails to notify" });
     }
 
-    if (!process.env.EMAIL_USER || !process.env.EMAIL_PASS) {
-      return res.status(500).json({
-        success: false,
-        message: "Email credentials are missing on the backend",
-      });
-    }
+    assertMailConfig();
 
     const keywordText = keyword || "MANUAL SOS";
     const timestampText = new Date().toISOString();
@@ -167,8 +146,7 @@ app.post("/send-sos", async (req, res) => {
         : `<p><strong>Media URLs:</strong> No media attached yet</p>`;
 
     const mailOptions = {
-      from: process.env.EMAIL_USER,
-      to: uniqueRecipients.join(","),
+      to: uniqueRecipients,
       subject: `EMERGENCY ALERT FROM SHEILD: ${riskLevel} RISK`,
       text: `Urgent! A ${riskLevel} security risk was detected for ${userEmail}.
 Trigger: ${keywordText}
@@ -190,7 +168,7 @@ Please check on the user immediately.`,
              <p><em>Check on your contact immediately. This is an automated alert.</em></p>`,
     };
 
-    await transporter.sendMail(mailOptions);
+    await sendMail(mailOptions);
     res.json({
       success: true,
       message: "Emergency emails sent successfully",
@@ -260,12 +238,7 @@ app.post("/send-safe", async (req, res) => {
       return res.json({ success: true, message: "No trusted emails to notify" });
     }
 
-    if (!process.env.EMAIL_USER || !process.env.EMAIL_PASS) {
-      return res.status(500).json({
-        success: false,
-        message: "Email credentials are missing on the backend",
-      });
-    }
+    assertMailConfig();
 
     const safeUserName =
       typeof user_name === "string" && user_name.trim().length > 0

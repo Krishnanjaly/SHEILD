@@ -82,6 +82,15 @@ app.post("/send-sos", async (req, res) => {
       });
     }
 
+    console.log("[MAIL_API] /send-sos request received", {
+      userId: normalizedUserId,
+      email: normalizedEmail,
+      riskLevel: risk_level || "HIGH",
+      hasLatitude: latitude !== undefined && latitude !== null && `${latitude}` !== "",
+      hasLongitude: longitude !== undefined && longitude !== null && `${longitude}` !== "",
+      mediaCount: Array.isArray(media_urls) ? media_urls.length : 0,
+    });
+
     const riskLevel = risk_level || "HIGH";
     const hasCoordinates =
       latitude !== undefined &&
@@ -103,6 +112,10 @@ app.post("/send-sos", async (req, res) => {
     }
 
     if (users.length === 0) {
+      console.log("[MAIL_API] /send-sos user lookup failed", {
+        userId: normalizedUserId,
+        email: normalizedEmail,
+      });
       return res.status(404).json({ success: false, message: "User not found" });
     }
 
@@ -126,6 +139,10 @@ app.post("/send-sos", async (req, res) => {
       .filter((value, index, array) => array.indexOf(value) === index);
 
     if (uniqueRecipients.length === 0) {
+      console.log("[MAIL_API] /send-sos no trusted recipients", {
+        userId,
+        userEmail,
+      });
       return res.json({ success: true, message: "No trusted emails to notify" });
     }
 
@@ -169,6 +186,12 @@ Please check on the user immediately.`,
     };
 
     await sendMail(mailOptions);
+    console.log("[MAIL_API] /send-sos send completed", {
+      userId,
+      userEmail,
+      recipients: uniqueRecipients.length,
+      riskLevel,
+    });
     res.json({
       success: true,
       message: "Emergency emails sent successfully",
@@ -204,6 +227,12 @@ app.post("/send-safe", async (req, res) => {
       });
     }
 
+    console.log("[MAIL_API] /send-safe request received", {
+      userId: normalizedUserId,
+      email: normalizedEmail,
+      hasUserName: typeof user_name === "string" && user_name.trim().length > 0,
+    });
+
     const db = require("./config/db");
     let users = [];
     if (normalizedUserId) {
@@ -213,6 +242,10 @@ app.post("/send-safe", async (req, res) => {
     }
 
     if (users.length === 0) {
+      console.log("[MAIL_API] /send-safe user lookup failed", {
+        userId: normalizedUserId,
+        email: normalizedEmail,
+      });
       return res.status(404).json({ success: false, message: "User not found" });
     }
 
@@ -235,6 +268,10 @@ app.post("/send-safe", async (req, res) => {
       .filter((value, index, array) => array.indexOf(value) === index);
 
     if (uniqueRecipients.length === 0) {
+      console.log("[MAIL_API] /send-safe no trusted recipients", {
+        userId: user.id,
+        userEmail: user.email,
+      });
       return res.json({ success: true, message: "No trusted emails to notify" });
     }
 
@@ -246,6 +283,11 @@ app.post("/send-safe", async (req, res) => {
         : user.name || user.email;
 
     await sendSafeEmail(uniqueRecipients.join(","), safeUserName);
+    console.log("[MAIL_API] /send-safe send completed", {
+      userId: user.id,
+      userEmail: user.email,
+      recipients: uniqueRecipients.length,
+    });
     res.json({
       success: true,
       message: "Safe emails sent successfully",

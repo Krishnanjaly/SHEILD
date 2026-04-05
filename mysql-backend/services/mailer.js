@@ -44,6 +44,18 @@ const resend =
     ? new Resend(process.env.RESEND_API_KEY.trim())
     : null;
 
+const maskEmail = (value) => {
+  const email = String(value || "").trim().toLowerCase();
+  const [name, domain] = email.split("@");
+  if (!name || !domain) return email || "unknown";
+  if (name.length <= 2) return `${name[0] || "*"}*@${domain}`;
+  return `${name[0]}***${name[name.length - 1]}@${domain}`;
+};
+
+const mailDebug = (message, meta = {}) => {
+  console.log("[MAILER]", message, meta);
+};
+
 const assertMailConfig = () => {
   if (resend) {
     return;
@@ -67,6 +79,15 @@ const sendMail = async ({ to, from, ...mailOptions }) => {
   }
 
   const fromAddress = resolveFromAddress(from);
+  const provider = resend ? "resend" : "gmail_smtp";
+
+  mailDebug("Preparing outbound mail", {
+    provider,
+    recipientCount: recipients.length,
+    recipients: recipients.map(maskEmail),
+    subject: mailOptions.subject || null,
+    from: fromAddress,
+  });
 
   if (resend) {
     const { data, error } = await resend.emails.send({
@@ -78,19 +99,48 @@ const sendMail = async ({ to, from, ...mailOptions }) => {
     });
 
     if (error) {
+      mailDebug("Resend send failed", {
+        code: error.name || "RESEND_SEND_FAILED",
+        message: error.message || null,
+      });
       const resendError = new Error(error.message || "Resend email send failed");
       resendError.code = "RESEND_SEND_FAILED";
       throw resendError;
     }
 
+    mailDebug("Resend send succeeded", {
+      provider,
+      id: data?.id || null,
+      recipientCount: recipients.length,
+    });
     return data;
   }
 
-  return transporter.sendMail({
-    from: fromAddress,
-    to: recipients.join(","),
-    ...mailOptions,
-  });
+  try {
+    const result = await transporter.sendMail({
+      from: fromAddress,
+      to: recipients.join(","),
+      ...mailOptions,
+    });
+
+    mailDebug("SMTP send succeeded", {
+      provider,
+      messageId: result?.messageId || null,
+      accepted: Array.isArray(result?.accepted) ? result.accepted.map(maskEmail) : [],
+      rejected: Array.isArray(result?.rejected) ? result.rejected.map(maskEmail) : [],
+    });
+
+    return result;
+  } catch (error) {
+    mailDebug("SMTP send failed", {
+      provider,
+      code: error?.code || null,
+      command: error?.command || null,
+      response: error?.response || null,
+      message: error?.message || null,
+    });
+    throw error;
+  }
 };
 
 module.exports = {

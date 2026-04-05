@@ -10,7 +10,7 @@ export interface GuardianLogEntry {
   timestamp: number;
   explanation: string;
   explanations: string[];
-  triggerSource: "MOTION" | "VOLUME" | "KEYWORD";
+  triggerSource: "MOTION" | "SHAKE" | "VOLUME" | "KEYWORD";
 }
 
 export const GuardianLogService = {

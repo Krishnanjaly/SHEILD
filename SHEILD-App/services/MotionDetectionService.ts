@@ -19,6 +19,7 @@ const ACCELERATION_FALL_THRESHOLD = 23;
 const ACCELERATION_JERK_THRESHOLD = 15;
 const ROTATION_SHAKE_THRESHOLD = 8.5;
 const SHAKE_MIN_COUNT = 5;
+const SHAKE_DETECTION_ENABLED_KEY = "SHAKE_DETECTION_ENABLED";
 
 class MotionDetectionServiceImpl {
   private accelerometerData: { x: number; y: number; z: number } | null = null;
@@ -30,6 +31,7 @@ class MotionDetectionServiceImpl {
   private samples: MotionSample[] = [];
   private isRunning = false;
   private lastTriggerAt = 0;
+  private shakeDetectionEnabled = true;
 
   private buildMagnitude(vector: { x: number; y: number; z: number } | null) {
     if (!vector) return 0;
@@ -87,7 +89,7 @@ class MotionDetectionServiceImpl {
       return;
     }
 
-    if (shakeCount >= SHAKE_MIN_COUNT) {
+    if (this.shakeDetectionEnabled && shakeCount >= SHAKE_MIN_COUNT) {
       this.emit({
         triggerType: "SHAKE",
         samples: recentSamples,
@@ -116,6 +118,11 @@ class MotionDetectionServiceImpl {
     return isLoggedIn === "true" && sensorsEnabled !== "false";
   }
 
+  private async refreshSettings() {
+    const shakeEnabled = await AsyncStorage.getItem(SHAKE_DETECTION_ENABLED_KEY);
+    this.shakeDetectionEnabled = shakeEnabled !== "false";
+  }
+
   private handleAppStateChange = async (nextState: AppStateStatus) => {
     if (nextState !== "active") {
       this.stop();
@@ -132,6 +139,7 @@ class MotionDetectionServiceImpl {
       return;
     }
 
+    await this.refreshSettings();
     this.isRunning = true;
     Accelerometer.setUpdateInterval(250);
     Gyroscope.setUpdateInterval(200);

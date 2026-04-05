@@ -1,5 +1,6 @@
 import React, { useEffect, useState, useRef, useCallback } from 'react';
 import { useSpeechRecognitionEvent } from 'expo-speech-recognition';
+import { Accelerometer } from 'expo-sensors';
 import {
     View, Alert, DeviceEventEmitter, Platform, PermissionsAndroid,
     Modal, Text, TouchableOpacity, StyleSheet, AppState, AppStateStatus,
@@ -62,6 +63,9 @@ const DEFAULT_LOW_RISK_KEYWORDS = ["call me", "come later", "emergency"];
 const DEFAULT_HIGH_RISK_KEYWORDS = ["help", "danger", "save me", "help help"];
 const AI_CLASSIFICATION_POPUP_MS = 1800;
 const KEYWORD_TRIGGER_ONLY_MODE = false;
+const SHAKE_SAMPLE_WINDOW = 16;
+const SHAKE_ANALYSIS_COOLDOWN_MS = 4000;
+const SHAKE_MIN_TRIGGER_SAMPLES = 4;
 
 const Device = { osBuildId: "mock-device-id" };
 const ReactNativeForegroundService = {
@@ -96,6 +100,9 @@ export default function EmergencyMonitor() {
     const analysisProgressIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
     const analysisCompletionTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const lastShakeTime = useRef<number>(0);
+    const shakeSamplesRef = useRef<Array<{ timestamp: number; accelerationMagnitude: number; rotationMagnitude: number }>>([]);
+    const shakeDetectionEnabledRef = useRef(true);
+    const shakeSensitivityRef = useRef(0.5);
     const analysisReadyRef = useRef(true);
     const lastCombinedAnalysisAtRef = useRef(0);
 
@@ -148,6 +155,8 @@ export default function EmergencyMonitor() {
     const appStateRef = useRef<AppStateStatus>('active');
     const lastVolumePressRef = useRef<number[]>([]);
     const volumeTriggerEnabledRef = useRef(false);
+    const volumePatternRecordingRef = useRef(false);
+    const activeVolumePatternRef = useRef<Array<'up' | 'down'>>(['up', 'up', 'down', 'down']);
     const lastKnownVolumeRef = useRef<number | null>(null);
     const isRecenteringVolumeRef = useRef(false);
     const currentEmergencyIdRef = useRef<number | null>(null);
@@ -212,8 +221,29 @@ export default function EmergencyMonitor() {
 
     const refreshVolumeTriggerState = useCallback(async () => {
         try {
-            const enabled = await AsyncStorage.getItem("VOLUME_TRIGGER_ENABLED");
+            const [enabled, activePattern, draftPattern] = await Promise.all([
+                AsyncStorage.getItem("VOLUME_TRIGGER_ENABLED"),
+                AsyncStorage.getItem("ACTIVE_VOLUME_PATTERN"),
+                AsyncStorage.getItem("volumePattern"),
+            ]);
             volumeTriggerEnabledRef.current = enabled === "true";
+            const storedPattern = activePattern || draftPattern;
+            if (storedPattern) {
+                try {
+                    const parsedPattern = JSON.parse(storedPattern);
+                    if (Array.isArray(parsedPattern)) {
+                        const normalizedPattern = parsedPattern
+                            .map((value) => String(value).toLowerCase())
+                            .filter((value): value is 'up' | 'down' => value === 'up' || value === 'down')
+                            .slice(0, 6);
+                        if (normalizedPattern.length >= 3) {
+                            activeVolumePatternRef.current = normalizedPattern;
+                        }
+                    }
+                } catch (error) {
+                    console.log("Failed to parse active volume pattern:", error);
+                }
+            }
             if (!volumeTriggerEnabledRef.current) {
                 lastVolumePressRef.current = [];
                 volumeHistory.current = [];
@@ -517,6 +547,7 @@ export default function EmergencyMonitor() {
         let riskSub: { remove: () => void } | null = null;
         let toggleSub: { remove: () => void } | null = null;
         let volumeTriggerSub: { remove: () => void } | null = null;
+        let patternRecordingSub: { remove: () => void } | null = null;
         let aiRiskSub: { remove: () => void } | null = null;
         let forceAiSub: { remove: () => void } | null = null;
         let movementUnsubscribe: (() => void) | undefined;
@@ -605,6 +636,12 @@ export default function EmergencyMonitor() {
         volumeTriggerSub = DeviceEventEmitter.addListener("STATUS_TOGGLE_CHANGED", () => {
             refreshVolumeTriggerState().catch(() => {});
         });
+        patternRecordingSub = DeviceEventEmitter.addListener(
+            "VOLUME_PATTERN_RECORDING_CHANGED",
+            (isRecording: boolean) => {
+                volumePatternRecordingRef.current = isRecording === true;
+            }
+        );
 
         // App State Listener for Background/Foreground transitions
         const appStateSubscription = AppState.addEventListener('change', handleAppStateChange);
@@ -620,6 +657,7 @@ export default function EmergencyMonitor() {
             cancelSub.remove();
             toggleSub?.remove();
             volumeTriggerSub?.remove();
+            patternRecordingSub?.remove();
             aiRiskSub?.remove();
             forceAiSub?.remove();
             movementUnsubscribe?.();
@@ -667,6 +705,11 @@ export default function EmergencyMonitor() {
             : "Alerting contacts silently";
     };
 
+    const getShakeThresholdFromSensitivity = useCallback((sensitivity: number) => {
+        const normalizedSensitivity = Math.min(1, Math.max(0, sensitivity));
+        return 2.25 - normalizedSensitivity * 0.9;
+    }, []);
+
     const updateGuardianAnalysisUi = useCallback(async (
         next: {
             isAnalyzing: boolean;
@@ -705,7 +748,7 @@ export default function EmergencyMonitor() {
 
     const runMotionAnalysisSequence = useCallback(async (params?: {
         motionEvent?: SensorMotionDetectionEvent;
-        triggerSource?: 'MOTION' | 'VOLUME' | 'KEYWORD';
+        triggerSource?: 'MOTION' | 'SHAKE' | 'VOLUME' | 'KEYWORD';
         transcriptCandidates?: string[];
         detectedLabel?: string;
     }) => {
@@ -920,6 +963,113 @@ export default function EmergencyMonitor() {
             MotionDetectionService.stop();
         };
     }, [runMotionAnalysisSequence]);
+
+    useEffect(() => {
+        let mounted = true;
+        let accelerometerSubscription: { remove: () => void } | null = null;
+        let toggleSub: { remove: () => void } | null = null;
+
+        const stopShakeDetection = () => {
+            accelerometerSubscription?.remove();
+            accelerometerSubscription = null;
+            shakeSamplesRef.current = [];
+        };
+
+        const startShakeDetection = async () => {
+            const [
+                isLoggedIn,
+                sensorsEnabled,
+                shakeEnabled,
+                storedSensitivity,
+            ] = await Promise.all([
+                AsyncStorage.getItem("isLoggedIn"),
+                AsyncStorage.getItem("SENSORS_ENABLED"),
+                AsyncStorage.getItem("SHAKE_DETECTION_ENABLED"),
+                AsyncStorage.getItem("SHAKE_SENSITIVITY"),
+            ]);
+
+            if (!mounted) {
+                return;
+            }
+
+            const parsedSensitivity = storedSensitivity !== null ? Number(storedSensitivity) : 0.5;
+            shakeSensitivityRef.current = Number.isFinite(parsedSensitivity)
+                ? Math.min(1, Math.max(0, parsedSensitivity))
+                : 0.5;
+            shakeDetectionEnabledRef.current = shakeEnabled !== "false";
+
+            if (
+                isLoggedIn !== "true" ||
+                sensorsEnabled === "false" ||
+                !shakeDetectionEnabledRef.current
+            ) {
+                stopShakeDetection();
+                return;
+            }
+
+            if (accelerometerSubscription) {
+                return;
+            }
+
+            Accelerometer.setUpdateInterval(180);
+            accelerometerSubscription = Accelerometer.addListener((data) => {
+                const timestamp = Date.now();
+                const intensity = Math.sqrt(
+                    data.x * data.x + data.y * data.y + data.z * data.z
+                );
+
+                const nextSamples = [
+                    ...shakeSamplesRef.current.slice(-(SHAKE_SAMPLE_WINDOW - 1)),
+                    {
+                        timestamp,
+                        accelerationMagnitude: intensity,
+                        rotationMagnitude: 0,
+                    },
+                ];
+                shakeSamplesRef.current = nextSamples;
+
+                const threshold = getShakeThresholdFromSensitivity(shakeSensitivityRef.current);
+                const recentAboveThreshold = nextSamples.filter(
+                    (sample) => sample.accelerationMagnitude > threshold
+                ).length;
+
+                if (recentAboveThreshold < SHAKE_MIN_TRIGGER_SAMPLES) {
+                    return;
+                }
+
+                if (timestamp - lastShakeTime.current < SHAKE_ANALYSIS_COOLDOWN_MS) {
+                    return;
+                }
+
+                lastShakeTime.current = timestamp;
+                const motionEvent: SensorMotionDetectionEvent = {
+                    triggerType: "SHAKE",
+                    samples: nextSamples,
+                    timestamp,
+                    description: "Shake detected from accelerometer",
+                };
+
+                runMotionAnalysisSequence({
+                    motionEvent,
+                    triggerSource: "SHAKE",
+                }).catch((error) => {
+                    console.error("Shake analysis sequence error:", error);
+                });
+            });
+        };
+
+        startShakeDetection().catch(console.error);
+        toggleSub = DeviceEventEmitter.addListener("STATUS_TOGGLE_CHANGED", () => {
+            stopShakeDetection();
+            startShakeDetection().catch(console.error);
+        });
+
+        return () => {
+            mounted = false;
+            toggleSub?.remove();
+            stopShakeDetection();
+        };
+    }, [getShakeThresholdFromSensitivity, runMotionAnalysisSequence]);
 
     const startAiAnalysisSequence = useCallback(async (movementEvent: MovementDetectionEvent) => {
         clearAiAnalysisProgress();
@@ -1844,6 +1994,10 @@ export default function EmergencyMonitor() {
             return;
         }
 
+        if (volumePatternRecordingRef.current) {
+            return;
+        }
+
         if (KEYWORD_TRIGGER_ONLY_MODE && appStateRef.current !== 'active') {
             console.log('Ignoring volume trigger while app is not in foreground.');
             return;
@@ -1873,22 +2027,24 @@ export default function EmergencyMonitor() {
 
         const now = Date.now();
         lastVolumePressRef.current.push(now);
-        lastVolumePressRef.current = lastVolumePressRef.current.filter((t) => now - t < 1200);
+        const patternWindowMs = Math.max(1800, activeVolumePatternRef.current.length * 700);
+        lastVolumePressRef.current = lastVolumePressRef.current.filter((t) => now - t < patternWindowMs);
 
         const direction: 'up' | 'down' = delta > 0 ? 'up' : 'down';
         volumeHistory.current.push({ time: now, direction });
-        volumeHistory.current = volumeHistory.current.filter((entry) => now - entry.time < 1200);
+        volumeHistory.current = volumeHistory.current.filter((entry) => now - entry.time < patternWindowMs);
 
-        const latestTwo = volumeHistory.current
-            .slice(-2)
+        const expectedPattern = activeVolumePatternRef.current.join('-');
+        const latestPattern = volumeHistory.current
+            .slice(-activeVolumePatternRef.current.length)
             .map((entry) => entry.direction)
             .join('-');
 
-        console.log('Volume button pattern:', latestTwo || direction);
+        console.log('Volume button pattern:', latestPattern || direction, 'expected:', expectedPattern);
 
         if (
-            lastVolumePressRef.current.length >= 2 &&
-            (latestTwo === 'up-up' || latestTwo === 'down-down' || latestTwo === 'up-down' || latestTwo === 'down-up') &&
+            volumeHistory.current.length >= activeVolumePatternRef.current.length &&
+            latestPattern === expectedPattern &&
             !listeningRef.current
         ) {
             lastVolumePressRef.current = [];

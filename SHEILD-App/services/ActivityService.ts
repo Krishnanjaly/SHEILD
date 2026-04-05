@@ -17,12 +17,14 @@ export interface Activity {
 export const ActivityService = {
     async logActivity(activityType: string, emergencyId: number | null = null) {
         try {
+            const userId = await AsyncStorage.getItem("userId");
             const response = await fetch(`${BASE_URL}/activity/log`, {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({
                     emergency_id: emergencyId,
                     activity_type: activityType,
+                    user_id: userId ? Number(userId) : null,
                 }),
             });
 
@@ -65,12 +67,44 @@ export const ActivityService = {
         try {
             const email = await AsyncStorage.getItem("userEmail");
             if (!email) return;
-            
-            // Backend endpoint for clearing logs if exists, otherwise logging local clear
-            console.log("Clearing activities for", email);
-            // Example: await fetch(`${BASE_URL}/activities/clear/${email}`, { method: 'DELETE' });
+
+            const response = await fetch(`${BASE_URL}/activities/${encodeURIComponent(email)}`, {
+                method: "DELETE",
+            });
+
+            if (!response.ok) {
+                console.error("Clear activities failed with status:", response.status);
+                return;
+            }
+
+            DeviceEventEmitter.emit("ACTIVITY_UPDATED");
         } catch (e) {
             console.error("Error clearing activities:", e);
+        }
+    },
+
+    async deleteActivity(activityId: string) {
+        try {
+            const email = await AsyncStorage.getItem("userEmail");
+            if (!email) return false;
+
+            const response = await fetch(
+                `${BASE_URL}/activities/${encodeURIComponent(email)}/${encodeURIComponent(activityId)}`,
+                {
+                    method: "DELETE",
+                }
+            );
+
+            if (!response.ok) {
+                console.error("Delete activity failed with status:", response.status);
+                return false;
+            }
+
+            DeviceEventEmitter.emit("ACTIVITY_UPDATED");
+            return true;
+        } catch (e) {
+            console.error("Error deleting activity:", e);
+            return false;
         }
     }
 };

@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, RefreshControl, Dimensions, DeviceEventEmitter } from "react-native";
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, RefreshControl, Dimensions, DeviceEventEmitter, Alert } from "react-native";
 import { MaterialIcons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
 import { ActivityService, Activity } from "../services/ActivityService";
@@ -57,15 +57,34 @@ export default function PreviousActivityScreen() {
             <LinearGradient colors={["#1c1313", "#120c0c"]} style={StyleSheet.absoluteFill} />
             
             {/* Header */}
-            <View style={styles.header}>
-                <TouchableOpacity onPress={() => router.back()} style={styles.backBtn}>
-                    <MaterialIcons name="arrow-back" size={24} color="white" />
-                </TouchableOpacity>
+                <View style={styles.header}>
+                    <TouchableOpacity onPress={() => router.back()} style={styles.backBtn}>
+                        <MaterialIcons name="arrow-back" size={24} color="white" />
+                    </TouchableOpacity>
                 <View>
                     <Text style={styles.headerTitle}>Security Activity</Text>
                     <Text style={styles.headerSub}>Past detections & alerts</Text>
                 </View>
-                <TouchableOpacity onPress={() => { ActivityService.clearActivities(); setActivities([]); }} style={styles.clearBtn}>
+                <TouchableOpacity
+                    onPress={() => {
+                        Alert.alert(
+                            "Delete History",
+                            "Delete all activity history from the database?",
+                            [
+                                { text: "Cancel", style: "cancel" },
+                                {
+                                    text: "Delete",
+                                    style: "destructive",
+                                    onPress: async () => {
+                                        await ActivityService.clearActivities();
+                                        setActivities([]);
+                                    },
+                                },
+                            ]
+                        );
+                    }}
+                    style={styles.clearBtn}
+                >
                     <MaterialIcons name="delete-sweep" size={24} color="#666" />
                 </TouchableOpacity>
             </View>
@@ -109,6 +128,30 @@ export default function PreviousActivityScreen() {
                                         <View style={[styles.levelBadge, { backgroundColor: `${getLevelColor(level)}30` }]}>
                                             <Text style={[styles.levelText, { color: getLevelColor(level) }]}>{level}</Text>
                                         </View>
+                                        <TouchableOpacity
+                                            style={styles.deleteItemBtn}
+                                            onPress={() => {
+                                                Alert.alert(
+                                                    "Delete Activity",
+                                                    "Delete this activity from the database?",
+                                                    [
+                                                        { text: "Cancel", style: "cancel" },
+                                                        {
+                                                            text: "Delete",
+                                                            style: "destructive",
+                                                            onPress: async () => {
+                                                                const deleted = await ActivityService.deleteActivity(item.id);
+                                                                if (deleted) {
+                                                                    setActivities((current) => current.filter((entry) => entry.id !== item.id));
+                                                                }
+                                                            },
+                                                        },
+                                                    ]
+                                                );
+                                            }}
+                                        >
+                                            <MaterialIcons name="delete-outline" size={18} color="#888" />
+                                        </TouchableOpacity>
                                     </View>
                                     <Text style={styles.itemDetails}>{item.details || item.activity_type}</Text>
                                 </View>
@@ -244,6 +287,11 @@ const styles = StyleSheet.create({
         paddingHorizontal: 8,
         paddingVertical: 3,
         borderRadius: 6,
+        marginLeft: 8,
+    },
+    deleteItemBtn: {
+        marginLeft: 10,
+        padding: 4,
     },
     levelText: {
         fontSize: 10,

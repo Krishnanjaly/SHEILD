@@ -14,6 +14,7 @@ import { MaterialIcons } from "@expo/vector-icons";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import BASE_URL from "../config/api";
 import { GuardianStateService } from "../services/GuardianStateService";
+import { AppLockStorage } from "../services/AppLockStorage";
 
 export default function PhoneScreen() {
   const router = useRouter();
@@ -28,11 +29,12 @@ export default function PhoneScreen() {
     const checkLogin = async () => {
       const isLoggedIn = await AsyncStorage.getItem("isLoggedIn");
       if (isLoggedIn === "true") {
-        router.replace("/dashboard");
+        const shouldRequireUnlock = await AppLockStorage.shouldRequireUnlock();
+        router.replace(shouldRequireUnlock ? "/app-lock" : "/dashboard");
       }
     };
     checkLogin();
-  }, []);
+  }, [router]);
 
   /* ================================
      ✅ Login Handler
@@ -69,7 +71,8 @@ export default function PhoneScreen() {
         await AsyncStorage.setItem("userEmail", data.user.email || "");
         await GuardianStateService.ensureBackgroundGuardianForLoggedInUser();
 
-        router.replace("/dashboard");
+        const nextRoute = await AppLockStorage.getFreshAuthSuccessRoute();
+        router.replace(nextRoute);
       } else {
         Alert.alert(
           "Login Failed",

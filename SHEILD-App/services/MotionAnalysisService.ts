@@ -160,7 +160,8 @@ export const MotionAnalysisService = {
     const abnormalShakingDetected =
       triggerType === "SHAKE" ||
       rotations.filter((value) => value >= ROTATION_SHAKE_THRESHOLD).length >= 4 ||
-      (changeFrequency >= 0.38 && repeatedSpikeCount >= 2);
+      (changeFrequency >= 0.38 && repeatedSpikeCount >= 2) ||
+      (motionVariance >= 0.22 && repeatedSpikeCount >= 3);
 
     const strongMovementDetected =
       peakAcceleration >= 2 ||
@@ -190,6 +191,9 @@ export const MotionAnalysisService = {
     if (abnormalShakingDetected) {
       motionScore += 14;
     }
+    if (triggerType === "SHAKE" && motionVariance >= 0.15) {
+      motionScore += 10;
+    }
     if (strongMovementDetected) {
       motionScore += 8;
     }
@@ -202,6 +206,9 @@ export const MotionAnalysisService = {
     }
     if (abnormalShakingDetected) {
       triggers.push("Abnormal shaking detected");
+    }
+    if (triggerType === "SHAKE" && motionVariance >= 0.15) {
+      triggers.push("High shake variance detected");
     }
     if (strongMovementDetected) {
       triggers.push("Strong movement intensity detected");

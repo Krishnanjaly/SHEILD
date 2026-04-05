@@ -25,7 +25,9 @@ router.delete("/delete-cloudinary/:publicId", emergencyController.deleteCloudina
 // Activity logging related
 router.post("/activity/log", activityController.logActivity);
 router.get("/activity/latest", activityController.getActivities);
+router.delete("/activities/:email/:id", activityController.deleteActivityByEmail);
 router.get("/activities/:email", activityController.getActivitiesByEmail);
+router.delete("/activities/:email", activityController.clearActivitiesByEmail);
 router.post("/notification", activityController.logNotification);
 
 // Special Features related

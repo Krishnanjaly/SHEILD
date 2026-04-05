@@ -14,16 +14,17 @@ import { useFocusEffect, useRouter } from "expo-router";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { DeviceEventEmitter } from "react-native";
 import { ProfileService } from "../services/EmergencyService";
+import { AppLockStorage, AppLockType } from "../services/AppLockStorage";
 
 export default function Settings() {
     const [keywordEnabled, setKeywordEnabled] = useState(true);
     const [volumeTrigger, setVolumeTrigger] = useState(false);
-    const [powerTrigger, setPowerTrigger] = useState(true);
     const [shakeEnabled, setShakeEnabled] = useState(true);
     const [shakeLevel, setShakeLevel] = useState(0.5);
     const [autoSiren, setAutoSiren] = useState(true);
     const [loopAudio, setLoopAudio] = useState(false);
-    const [pinEnabled, setPinEnabled] = useState(true);
+    const [isAppLockEnabled, setIsAppLockEnabled] = useState(false);
+    const [lockType, setLockType] = useState<AppLockType>(null);
     const [stealthMode, setStealthMode] = useState(false);
     const [keywords, setKeywords] = useState("");
     const router = useRouter();
@@ -32,10 +33,51 @@ export default function Settings() {
         .map(word => word.trim().toLowerCase());
 
     const loadSettings = useCallback(async () => {
-        const storedVolumeTrigger = await AsyncStorage.getItem("VOLUME_TRIGGER_ENABLED");
+        const [
+            storedKeywordEnabled,
+            storedVolumeTrigger,
+            storedShakeEnabled,
+            storedShakeSensitivity,
+            storedAutoSiren,
+            storedLoopAudio,
+            storedStealthMode,
+            appLockState,
+        ] = await Promise.all([
+            AsyncStorage.getItem("KEYWORD_DETECTION_ENABLED"),
+            AsyncStorage.getItem("VOLUME_TRIGGER_ENABLED"),
+            AsyncStorage.getItem("SHAKE_DETECTION_ENABLED"),
+            AsyncStorage.getItem("SHAKE_SENSITIVITY"),
+            AsyncStorage.getItem("AUTO_SIREN_ENABLED"),
+            AsyncStorage.getItem("LOOP_AUDIO_ENABLED"),
+            AsyncStorage.getItem("STEALTH_MODE_ENABLED"),
+            AppLockStorage.getState(),
+        ]);
+        if (storedKeywordEnabled !== null) {
+            setKeywordEnabled(storedKeywordEnabled === "true");
+        }
         if (storedVolumeTrigger !== null) {
             setVolumeTrigger(storedVolumeTrigger === "true");
         }
+        if (storedShakeEnabled !== null) {
+            setShakeEnabled(storedShakeEnabled === "true");
+        }
+        if (storedShakeSensitivity !== null) {
+            const parsedSensitivity = Number(storedShakeSensitivity);
+            if (Number.isFinite(parsedSensitivity)) {
+                setShakeLevel(Math.min(1, Math.max(0, parsedSensitivity)));
+            }
+        }
+        if (storedAutoSiren !== null) {
+            setAutoSiren(storedAutoSiren === "true");
+        }
+        if (storedLoopAudio !== null) {
+            setLoopAudio(storedLoopAudio === "true");
+        }
+        if (storedStealthMode !== null) {
+            setStealthMode(storedStealthMode === "true");
+        }
+        setIsAppLockEnabled(appLockState.isAppLockEnabled);
+        setLockType(appLockState.lockType);
     }, []);
 
     const handleVolumeToggle = async (val: boolean) => {
@@ -51,6 +93,64 @@ export default function Settings() {
         } catch (error) {
             console.log("Failed to sync volume trigger setting:", error);
         }
+    };
+
+    const handleAppLockToggle = async (value: boolean) => {
+        setIsAppLockEnabled(value);
+        if (!value) {
+            setLockType(null);
+        }
+        await AppLockStorage.setEnabled(value);
+    };
+
+    const handleKeywordToggle = async (value: boolean) => {
+        setKeywordEnabled(value);
+        await AsyncStorage.setItem("KEYWORD_DETECTION_ENABLED", value.toString());
+        DeviceEventEmitter.emit("STATUS_TOGGLE_CHANGED");
+    };
+
+    const handleShakeToggle = async (value: boolean) => {
+        setShakeEnabled(value);
+        await AsyncStorage.setItem("SHAKE_DETECTION_ENABLED", value.toString());
+        DeviceEventEmitter.emit("STATUS_TOGGLE_CHANGED");
+    };
+
+    const handleShakeSensitivityChange = async (value: number) => {
+        setShakeLevel(value);
+        await AsyncStorage.setItem("SHAKE_SENSITIVITY", value.toString());
+        DeviceEventEmitter.emit("STATUS_TOGGLE_CHANGED");
+    };
+
+    const handleAutoSirenToggle = async (value: boolean) => {
+        setAutoSiren(value);
+        await AsyncStorage.setItem("AUTO_SIREN_ENABLED", value.toString());
+        DeviceEventEmitter.emit("STATUS_TOGGLE_CHANGED");
+    };
+
+    const handleLoopAudioToggle = async (value: boolean) => {
+        setLoopAudio(value);
+        await AsyncStorage.setItem("LOOP_AUDIO_ENABLED", value.toString());
+        DeviceEventEmitter.emit("STATUS_TOGGLE_CHANGED");
+    };
+
+    const handleStealthModeToggle = async (value: boolean) => {
+        setStealthMode(value);
+        await AsyncStorage.setItem("STEALTH_MODE_ENABLED", value.toString());
+        DeviceEventEmitter.emit("STATUS_TOGGLE_CHANGED");
+    };
+
+    const handleSetPin = async () => {
+        setIsAppLockEnabled(true);
+        setLockType("PIN");
+        await AppLockStorage.preparePinSelection();
+        router.push("/set-pin");
+    };
+
+    const handleSetPattern = async () => {
+        setIsAppLockEnabled(true);
+        setLockType("PATTERN");
+        await AppLockStorage.preparePatternSelection();
+        router.push("/set-pattern");
     };
 
     useEffect(() => {
@@ -95,7 +195,7 @@ export default function Settings() {
                         icon="keyboard-voice"
                         label="Enable Keyword Detection"
                         value={keywordEnabled}
-                        onValueChange={setKeywordEnabled}
+                        onValueChange={handleKeywordToggle}
                     />
 
                     {keywordEnabled && (
@@ -128,18 +228,26 @@ export default function Settings() {
                         value={volumeTrigger}
                         onValueChange={handleVolumeToggle}
                     />
-                    <Row
-                        icon="power-settings-new"
-                        label="Long Power Press"
-                        value={powerTrigger}
-                        onValueChange={setPowerTrigger}
-                    />
+                    {volumeTrigger && (
+                        <TouchableOpacity
+                            style={styles.keywordOption}
+                            onPress={() => router.push("/hardware-trigger")}
+                        >
+                            <MaterialIcons name="devices" size={22} color="#EC1313" />
+                            <Text style={styles.keywordText}>Hardware Trigger Settings</Text>
+                        </TouchableOpacity>
+                    )}
                     <Row
                         icon="vibration"
                         label="Shake Detection"
                         value={shakeEnabled}
-                        onValueChange={setShakeEnabled}
+                        onValueChange={handleShakeToggle}
                     />
+                    {!shakeEnabled && (
+                        <Text style={styles.helperText}>
+                            Enable this option if you want the sensors to detect abnormal movement.
+                        </Text>
+                    )}
 
                     <View style={{ paddingHorizontal: 15 }}>
                         <Text style={styles.sliderLabel}>Shake Sensitivity</Text>
@@ -147,18 +255,11 @@ export default function Settings() {
                             minimumValue={0}
                             maximumValue={1}
                             value={shakeLevel}
-                            onValueChange={setShakeLevel}
+                            onSlidingComplete={handleShakeSensitivityChange}
                             minimumTrackTintColor="#EC1313"
                             maximumTrackTintColor="#444"
                         />
                     </View>
-                    <TouchableOpacity
-                        style={styles.keywordOption}
-                        onPress={() => router.push("/hardware-trigger")}
-                    >
-                        <MaterialIcons name="devices" size={22} color="#EC1313" />
-                        <Text style={styles.keywordText}>Hardware Trigger Settings</Text>
-                    </TouchableOpacity>
                 </Section>
 
                 {/* AUDIO SETTINGS */}
@@ -167,13 +268,13 @@ export default function Settings() {
                         icon="campaign"
                         label="Auto-play Siren"
                         value={autoSiren}
-                        onValueChange={setAutoSiren}
+                        onValueChange={handleAutoSirenToggle}
                     />
                     <Row
                         icon="loop"
                         label="Loop Alert Audio"
                         value={loopAudio}
-                        onValueChange={setLoopAudio}
+                        onValueChange={handleLoopAudioToggle}
                     />
                 </Section>
 
@@ -182,14 +283,39 @@ export default function Settings() {
                     <Row
                         icon="lock"
                         label="PIN Protection"
-                        value={pinEnabled}
-                        onValueChange={setPinEnabled}
+                        value={isAppLockEnabled}
+                        onValueChange={handleAppLockToggle}
                     />
+                    {isAppLockEnabled && (
+                        <>
+                            <TouchableOpacity
+                                style={styles.keywordOption}
+                                onPress={handleSetPin}
+                            >
+                                <MaterialIcons name="pin" size={22} color="#EC1313" />
+                                <Text style={styles.keywordText}>Set PIN</Text>
+                            </TouchableOpacity>
+
+                            <TouchableOpacity
+                                style={styles.keywordOption}
+                                onPress={handleSetPattern}
+                            >
+                                <MaterialIcons name="gesture" size={22} color="#EC1313" />
+                                <Text style={styles.keywordText}>Set Pattern</Text>
+                            </TouchableOpacity>
+
+                            <View style={styles.appLockStatus}>
+                                <Text style={styles.appLockStatusText}>
+                                    {lockType ? `Current: ${lockType}` : "Current: Not Set"}
+                                </Text>
+                            </View>
+                        </>
+                    )}
                     <Row
                         icon="visibility-off"
                         label="Stealth Mode"
                         value={stealthMode}
-                        onValueChange={setStealthMode}
+                        onValueChange={handleStealthModeToggle}
                     />
                 </Section>
 
@@ -335,6 +461,13 @@ const styles = StyleSheet.create({
         fontSize: 12,
         marginBottom: 5,
     },
+    helperText: {
+        color: "#AAA",
+        fontSize: 12,
+        lineHeight: 18,
+        paddingHorizontal: 15,
+        marginTop: -4,
+    },
     resetBtn: {
         marginTop: 10,
         borderColor: "#EC1313",
@@ -390,5 +523,17 @@ const styles = StyleSheet.create({
         color: "#fff",
         fontSize: 14,
         fontWeight: "600",
+    },
+    appLockStatus: {
+        backgroundColor: "#3A2720",
+        paddingVertical: 12,
+        paddingHorizontal: 15,
+        borderRadius: 12,
+        marginTop: 10,
+    },
+    appLockStatusText: {
+        color: "#EC1313",
+        fontSize: 13,
+        fontWeight: "700",
     },
 });

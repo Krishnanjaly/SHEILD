@@ -12,6 +12,7 @@ import { useRouter, useLocalSearchParams } from "expo-router";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import BASE_URL from "../config/api";
 import { GuardianStateService } from "../services/GuardianStateService";
+import { AppLockStorage } from "../services/AppLockStorage";
 
 
 export default function OtpScreen() {
@@ -76,7 +77,8 @@ export default function OtpScreen() {
         }
 
         if (data.existingUser) {
-          router.replace("/dashboard");
+          const nextRoute = await AppLockStorage.getFreshAuthSuccessRoute();
+          router.replace(nextRoute);
         } else {
           router.replace("/profile-setup");
         }

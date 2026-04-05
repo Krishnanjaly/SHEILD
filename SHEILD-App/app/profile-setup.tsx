@@ -17,6 +17,7 @@ import { MaterialIcons } from "@expo/vector-icons";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import BASE_URL from "../config/api";
 import { GuardianStateService } from "../services/GuardianStateService";
+import { AppLockStorage } from "../services/AppLockStorage";
 
 export default function ProfileSetup() {
   const router = useRouter();
@@ -79,7 +80,8 @@ export default function ProfileSetup() {
         await AsyncStorage.setItem("isLoggedIn", "true");
         await GuardianStateService.ensureBackgroundGuardianForLoggedInUser();
         Alert.alert("Success", "Account created successfully!");
-        router.replace("/dashboard");
+        const nextRoute = await AppLockStorage.getFreshAuthSuccessRoute();
+        router.replace(nextRoute);
       } else {
         Alert.alert("Error", data.message || "Registration failed");
       }

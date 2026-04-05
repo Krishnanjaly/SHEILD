@@ -1,4 +1,6 @@
 import {
+    Alert,
+    DeviceEventEmitter,
     View,
     Text,
     StyleSheet,
@@ -8,12 +10,87 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { MaterialIcons } from "@expo/vector-icons";
-import { useState } from "react";
-import { useRouter } from "expo-router";
+import { useCallback, useState } from "react";
+import { useFocusEffect, useRouter } from "expo-router";
+import AsyncStorage from "@react-native-async-storage/async-storage";
+import { ProfileService } from "../services/EmergencyService";
+
+const VOLUME_PATTERN_STORAGE_KEY = "volumePattern";
+const ACTIVE_VOLUME_PATTERN_STORAGE_KEY = "ACTIVE_VOLUME_PATTERN";
+const VOLUME_TRIGGER_ENABLED_KEY = "VOLUME_TRIGGER_ENABLED";
+const DEFAULT_PATTERN_LABEL = "Default: Up-Up-Down-Down";
+const DEFAULT_PATTERN = ["UP", "UP", "DOWN", "DOWN"];
 
 export default function HardwareTrigger() {
     const router = useRouter();
     const [enabled, setEnabled] = useState(true);
+    const [patternLabel, setPatternLabel] = useState(DEFAULT_PATTERN_LABEL);
+
+    useFocusEffect(useCallback(() => {
+        const loadPatternLabel = async () => {
+            try {
+                const storedEnabled = await AsyncStorage.getItem(VOLUME_TRIGGER_ENABLED_KEY);
+                if (storedEnabled !== null) {
+                    setEnabled(storedEnabled === "true");
+                }
+
+                const rawPattern = await AsyncStorage.getItem(VOLUME_PATTERN_STORAGE_KEY);
+                if (!rawPattern) {
+                    setPatternLabel(DEFAULT_PATTERN_LABEL);
+                    return;
+                }
+
+                const parsedPattern = JSON.parse(rawPattern);
+                if (!Array.isArray(parsedPattern) || parsedPattern.length === 0) {
+                    setPatternLabel(DEFAULT_PATTERN_LABEL);
+                    return;
+                }
+
+                const formattedPattern = parsedPattern
+                    .filter((value) => value === "UP" || value === "DOWN")
+                    .map((value) => value === "UP" ? "Up" : "Down")
+                    .join("-");
+
+                setPatternLabel(formattedPattern ? `Saved: ${formattedPattern}` : DEFAULT_PATTERN_LABEL);
+            } catch {
+                setPatternLabel(DEFAULT_PATTERN_LABEL);
+            }
+        };
+
+        loadPatternLabel();
+    }, []));
+
+    const handleSaveConfiguration = useCallback(async () => {
+        try {
+            const rawPattern = await AsyncStorage.getItem(VOLUME_PATTERN_STORAGE_KEY);
+            const parsedPattern = rawPattern ? JSON.parse(rawPattern) : null;
+            const nextPattern = Array.isArray(parsedPattern) && parsedPattern.length >= 3
+                ? parsedPattern.filter((value) => value === "UP" || value === "DOWN").slice(0, 6)
+                : DEFAULT_PATTERN;
+
+            await AsyncStorage.multiSet([
+                [VOLUME_TRIGGER_ENABLED_KEY, "true"],
+                [ACTIVE_VOLUME_PATTERN_STORAGE_KEY, JSON.stringify(nextPattern)],
+            ]);
+            setEnabled(true);
+
+            DeviceEventEmitter.emit("STATUS_TOGGLE_CHANGED");
+
+            const userId = await AsyncStorage.getItem("userId");
+            if (userId) {
+                await ProfileService.saveHardwareTrigger(
+                    userId,
+                    true,
+                    nextPattern.join("-").toLowerCase()
+                );
+            }
+
+            Alert.alert("Configuration Saved", "Pattern Saved Successfully");
+        } catch (error) {
+            console.log("Failed to save hardware trigger configuration:", error);
+            Alert.alert("Save Failed", "Unable to save hardware trigger configuration");
+        }
+    }, [enabled]);
 
     return (
         <SafeAreaView style={styles.container}>
@@ -82,7 +159,9 @@ export default function HardwareTrigger() {
                     <InstructionItem
                         icon="touch-app"
                         title="Custom Pattern"
-                        description="Default: Up-Up-Down-Down"
+                        description={patternLabel}
+                        asButton
+                        onPress={() => router.push("/custom-pattern")}
                     />
 
                     <InstructionItem
@@ -93,7 +172,7 @@ export default function HardwareTrigger() {
                 </View>
 
                 {/* Save Button */}
-                <TouchableOpacity style={styles.saveButton}>
+                <TouchableOpacity style={styles.saveButton} onPress={handleSaveConfiguration}>
                     <Text style={styles.saveText}>Save Configuration</Text>
                 </TouchableOpacity>
 
@@ -108,14 +187,20 @@ export default function HardwareTrigger() {
 
 /* ---------- Instruction Component ---------- */
 
-const InstructionItem = ({ icon, title, description }: any) => (
+const InstructionItem = ({ icon, title, description, asButton, onPress }: any) => (
     <View style={styles.instructionRow}>
         <View style={styles.iconBox}>
             <MaterialIcons name={icon} size={22} color="#aaa" />
         </View>
         <View>
             <Text style={styles.instructionTitle}>{title}</Text>
-            <Text style={styles.instructionDesc}>{description}</Text>
+            {asButton ? (
+                <TouchableOpacity style={styles.patternButton} activeOpacity={0.85} onPress={onPress}>
+                    <Text style={styles.patternButtonText}>{description}</Text>
+                </TouchableOpacity>
+            ) : (
+                <Text style={styles.instructionDesc}>{description}</Text>
+            )}
         </View>
     </View>
 );
@@ -249,6 +334,23 @@ const styles = StyleSheet.create({
     instructionDesc: {
         color: "#888",
         fontSize: 12,
+    },
+
+    patternButton: {
+        marginTop: 8,
+        alignSelf: "flex-start",
+        backgroundColor: "rgba(236,19,19,0.14)",
+        borderWidth: 1,
+        borderColor: "rgba(236,19,19,0.38)",
+        paddingHorizontal: 14,
+        paddingVertical: 10,
+        borderRadius: 12,
+    },
+
+    patternButtonText: {
+        color: "#f6d4d4",
+        fontSize: 12,
+        fontWeight: "700",
     },
 
     saveButton: {

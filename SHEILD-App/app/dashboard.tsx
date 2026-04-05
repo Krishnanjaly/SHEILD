@@ -24,6 +24,7 @@ import { ActivityService, Activity } from "../services/ActivityService";
 import { EmergencyService } from "../services/EmergencyService";
 import { GuardianServiceManager } from "../services/GuardianServiceManager";
 import { GuardianStateService } from "../services/GuardianStateService";
+import { AppLockStorage } from "../services/AppLockStorage";
 import {
   ensureVoicePermission,
   isVoiceModuleAvailable,
@@ -419,6 +420,31 @@ export default function Dashboard() {
     );
   };
 
+  const handleLogoutPreservingAppLock = () => {
+    Alert.alert(
+      "Logout",
+      "Are you sure you want to logout?",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Logout",
+          onPress: async () => {
+            await AppLockStorage.disableAppLockPreserveCredentials();
+            await AsyncStorage.multiRemove([
+              "isLoggedIn",
+              "userId",
+              "userName",
+              "userEmail",
+            ]);
+
+            Alert.alert("Success", "Logged out successfully!");
+            router.replace("/phone");
+          },
+        },
+      ]
+    );
+  };
+
 
 
   return (
@@ -479,7 +505,7 @@ export default function Dashboard() {
               style={styles.dropdownItem}
               onPress={() => {
                 setMenuVisible(false);
-                handleLogout();
+                handleLogoutPreservingAppLock();
               }}
             >
               <MaterialIcons name="logout" size={18} color="#ff4444" />

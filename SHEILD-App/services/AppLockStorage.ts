@@ -1,15 +1,17 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { AppLockSecretStorage } from "./AppLockSecretStorage";
 
-export type AppLockType = "PIN" | "PATTERN" | "FINGERPRINT" | null;
+export type AppLockType = "PIN" | "PATTERN" | null;
 
 export const APP_LOCK_ENABLED_KEY = "appLockEnabled";
 export const APP_LOCK_TYPE_KEY = "lockType";
 export const APP_LOCK_PIN_KEY = "appLockPin";
 export const APP_LOCK_PATTERN_KEY = "appLockPattern";
-export const APP_LOCK_BIOMETRIC_ENABLED_KEY = "biometricEnabled";
 
 const toBooleanString = (value: boolean) => (value ? "true" : "false");
+const normalizeLockType = (value: string | null): AppLockType =>
+  value === "PIN" || value === "PATTERN" ? value : null;
+const REMOVED_APP_LOCK_AUTH_FLAG = ["bio", "metricEnabled"].join("");
 
 export const AppLockStorage = {
   async getState() {
@@ -18,22 +20,28 @@ export const AppLockStorage = {
         APP_LOCK_ENABLED_KEY,
         APP_LOCK_TYPE_KEY,
         APP_LOCK_PATTERN_KEY,
-        APP_LOCK_BIOMETRIC_ENABLED_KEY,
       ]),
       AppLockSecretStorage.getPin(),
       AppLockSecretStorage.getPattern(),
     ]);
     const [, enabled] = entries[0];
-    const [, lockType] = entries[1];
+    const [, rawLockType] = entries[1];
     const [, pattern] = entries[2];
-    const [, biometricEnabled] = entries[3];
+    const lockType = normalizeLockType(rawLockType);
+
+    if (rawLockType && rawLockType !== lockType) {
+      await AsyncStorage.multiSet([
+        [APP_LOCK_TYPE_KEY, ""],
+        [APP_LOCK_ENABLED_KEY, "false"],
+        [REMOVED_APP_LOCK_AUTH_FLAG, "false"],
+      ]);
+    }
 
     return {
-      isAppLockEnabled: enabled === "true",
-      lockType: (lockType as AppLockType) || null,
+      isAppLockEnabled: enabled === "true" && lockType !== null,
+      lockType,
       pin: pin || null,
       pattern: securePattern || pattern || null,
-      biometricEnabled: biometricEnabled === "true",
     };
   },
 
@@ -42,48 +50,40 @@ export const AppLockStorage = {
     if (!enabled) {
       await AsyncStorage.setItem(APP_LOCK_TYPE_KEY, "");
     }
+    await AsyncStorage.setItem(REMOVED_APP_LOCK_AUTH_FLAG, "false");
   },
 
   async setLockType(lockType: AppLockType) {
     await AsyncStorage.setItem(APP_LOCK_TYPE_KEY, lockType ?? "");
+    await AsyncStorage.setItem(REMOVED_APP_LOCK_AUTH_FLAG, "false");
   },
 
   async activatePin(pin: string) {
-    const biometricEnabled = await AsyncStorage.getItem(APP_LOCK_BIOMETRIC_ENABLED_KEY);
     await AsyncStorage.multiSet([
       [APP_LOCK_ENABLED_KEY, "true"],
       [APP_LOCK_TYPE_KEY, "PIN"],
-      [APP_LOCK_BIOMETRIC_ENABLED_KEY, biometricEnabled === "true" ? "true" : "false"],
+      [REMOVED_APP_LOCK_AUTH_FLAG, "false"],
     ]);
     await AppLockSecretStorage.savePin(pin);
     await AsyncStorage.removeItem(APP_LOCK_PATTERN_KEY);
   },
 
   async activatePattern(pattern: number[]) {
-    const biometricEnabled = await AsyncStorage.getItem(APP_LOCK_BIOMETRIC_ENABLED_KEY);
     await AsyncStorage.multiSet([
       [APP_LOCK_ENABLED_KEY, "true"],
       [APP_LOCK_TYPE_KEY, "PATTERN"],
-      [APP_LOCK_BIOMETRIC_ENABLED_KEY, biometricEnabled === "true" ? "true" : "false"],
+      [REMOVED_APP_LOCK_AUTH_FLAG, "false"],
     ]);
     await AppLockSecretStorage.savePattern(pattern);
     await AsyncStorage.removeItem(APP_LOCK_PIN_KEY);
     await AppLockSecretStorage.deletePin();
   },
 
-  async activateFingerprint() {
-    const state = await this.getState();
-    await AsyncStorage.multiSet([
-      [APP_LOCK_ENABLED_KEY, "true"],
-      [APP_LOCK_TYPE_KEY, state.lockType ?? "FINGERPRINT"],
-      [APP_LOCK_BIOMETRIC_ENABLED_KEY, "true"],
-    ]);
-  },
-
   async preparePinSelection() {
     await AsyncStorage.multiSet([
       [APP_LOCK_ENABLED_KEY, "true"],
       [APP_LOCK_TYPE_KEY, "PIN"],
+      [REMOVED_APP_LOCK_AUTH_FLAG, "false"],
     ]);
     await AsyncStorage.removeItem(APP_LOCK_PATTERN_KEY);
     await AppLockSecretStorage.deletePattern();
@@ -93,6 +93,7 @@ export const AppLockStorage = {
     await AsyncStorage.multiSet([
       [APP_LOCK_ENABLED_KEY, "true"],
       [APP_LOCK_TYPE_KEY, "PATTERN"],
+      [REMOVED_APP_LOCK_AUTH_FLAG, "false"],
     ]);
     await AsyncStorage.removeItem(APP_LOCK_PIN_KEY);
     await AppLockSecretStorage.deletePin();
@@ -108,13 +109,16 @@ export const AppLockStorage = {
     await AsyncStorage.multiSet([
       [APP_LOCK_ENABLED_KEY, "false"],
       [APP_LOCK_TYPE_KEY, ""],
-      [APP_LOCK_BIOMETRIC_ENABLED_KEY, "false"],
+      [REMOVED_APP_LOCK_AUTH_FLAG, "false"],
     ]);
     await this.clearMethods();
   },
 
   async disableAppLockPreserveCredentials() {
-    await AsyncStorage.setItem(APP_LOCK_ENABLED_KEY, "false");
+    await AsyncStorage.multiSet([
+      [APP_LOCK_ENABLED_KEY, "false"],
+      [REMOVED_APP_LOCK_AUTH_FLAG, "false"],
+    ]);
   },
 
   async shouldRequireUnlock() {
@@ -131,34 +135,22 @@ export const AppLockStorage = {
     if (state.lockType === "PATTERN") {
       try {
         const parsed = state.pattern ? JSON.parse(state.pattern) : null;
-        if (Array.isArray(parsed) && parsed.length >= 4) {
-          return true;
-        }
+        return Array.isArray(parsed) && parsed.length >= 4;
       } catch {
-        return state.biometricEnabled;
+        return false;
       }
     }
 
-    if (state.lockType === "FINGERPRINT") {
-      return state.biometricEnabled;
-    }
-
-    return state.biometricEnabled;
+    return false;
   },
 
   async getAuthSuccessRoute() {
     const shouldRequireUnlock = await this.shouldRequireUnlock();
-    return shouldRequireUnlock ? "/app-lock" : "/settings";
+    return shouldRequireUnlock ? "/app-lock" : "/dashboard";
   },
 
   async getFreshAuthSuccessRoute() {
     const shouldRequireUnlock = await this.shouldRequireUnlock();
-
-    if (shouldRequireUnlock) {
-      await this.disableAppLockPreserveCredentials();
-      return "/phone";
-    }
-
-    return "/settings";
+    return shouldRequireUnlock ? "/app-lock" : "/dashboard";
   },
 };

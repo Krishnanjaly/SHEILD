@@ -1,5 +1,5 @@
 const db = require("../config/db");
-const { sendMail } = require("../services/mailer");
+const { sendSmsToMany } = require("../services/smsService");
 
 const escapeHtml = (value) =>
   String(value ?? "")
@@ -76,9 +76,9 @@ const createQrEmergency = async ({ userId, latitude, longitude }) => {
   }
 
   const user = users[0];
-  const { emails } = await getEmergencyContacts(userId);
+  const { phoneNumbers } = await getEmergencyContacts(userId);
 
-  if (emails.length === 0) {
+  if (phoneNumbers.length === 0) {
     return {
       status: 400,
       body: {
@@ -102,33 +102,21 @@ const createQrEmergency = async ({ userId, latitude, longitude }) => {
   );
 
   const timestampText = new Date().toISOString();
-  const subject = "SHEILD EMERGENCY ALERT: QR SOS";
-  const emailText = `A bystander triggered the user's emergency QR.\n\nUser: ${
+  const smsText = `SHEILD EMERGENCY ALERT: QR SOS
+A bystander triggered the user's emergency QR.
+User: ${
     user.name || user.email || `User ${user.id}`
-  }\nUser Email: ${user.email}\nTrigger: QR SOS\nTimestamp: ${timestampText}\nLive Location: ${locationUrl}\n\nPlease contact the user immediately.`;
-  const emailHtml = `<h3>SHEILD EMERGENCY ALERT</h3>
-    <p>A bystander triggered the user's emergency QR.</p>
-    <p><strong>User:</strong> ${escapeHtml(user.name || user.email || `User ${user.id}`)}</p>
-    <p><strong>User Email:</strong> ${escapeHtml(user.email)}</p>
-    <p><strong>Trigger:</strong> QR SOS</p>
-    <p><strong>Timestamp:</strong> ${escapeHtml(timestampText)}</p>
-    <p><strong>Live Location:</strong> ${
-      locationUrl.startsWith("http")
-        ? `<a href="${escapeHtml(locationUrl)}">${escapeHtml(locationUrl)}</a>`
-        : escapeHtml(locationUrl)
-    }</p>
-    <p><em>This alert was sent automatically after the SOS button on the QR web page was pressed.</em></p>`;
+  }
+Trigger: QR SOS
+Timestamp: ${timestampText}
+Live Location: ${locationUrl}
+Please contact the user immediately.`;
 
-  if (emails.length > 0) {
-    await sendMail({
-      to: emails,
-      subject,
-      text: emailText,
-      html: emailHtml,
-    });
+  if (phoneNumbers.length > 0) {
+    const smsResult = await sendSmsToMany(phoneNumbers, smsText);
 
     await db.query(
-      "INSERT INTO emergency_alert (emergency_id, alert_type, alert_time, delivery_status) VALUES (?, 'email', NOW(), 'SENT')",
+      "INSERT INTO emergency_alert (emergency_id, alert_type, alert_time, delivery_status) VALUES (?, 'sms', NOW(), 'SENT')",
       [emergencyId]
     );
   }
@@ -139,7 +127,7 @@ const createQrEmergency = async ({ userId, latitude, longitude }) => {
       success: true,
       emergency_id: emergencyId,
       message: "QR SOS triggered successfully",
-      emailRecipients: emails.length,
+      smsRecipients: phoneNumbers.length,
       locationUrl,
     },
   };
@@ -265,7 +253,7 @@ const renderQrEmergencyPage = async (req, res) => {
     <p>This page will send an automatic emergency alert with live location to <span class="user">${userLabel}</span>'s emergency contacts.</p>
     <button id="sosButton">Send SOS to the emergency contacts of the user</button>
     <div id="status" class="status">Ready to request location and send SOS.</div>
-    <div class="footer">One tap is required. This page sends email alerts with live location to the user's emergency contacts.</div>
+    <div class="footer">One tap is required. This page sends SMS alerts with live location to the user's emergency contacts.</div>
   </main>
   <script>
     const button = document.getElementById("sosButton");
@@ -294,7 +282,7 @@ const renderQrEmergencyPage = async (req, res) => {
         throw new Error(data.message || "Unable to send SOS");
       }
 
-      setStatus("SOS email sent successfully to the user's emergency contacts.", "success");
+      setStatus("SOS SMS sent successfully to the user's emergency contacts.", "success");
       button.disabled = true;
       button.textContent = "SOS Sent";
     };

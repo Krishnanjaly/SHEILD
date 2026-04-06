@@ -1,6 +1,6 @@
 const db = require("../config/db");
 const cloudinary = require("cloudinary").v2;
-const { sendMail } = require("../services/mailer");
+const { sendSmsToMany } = require("../services/smsService");
 
 cloudinary.config({
   cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
@@ -10,21 +10,42 @@ cloudinary.config({
 
 const getEmergencyRecipients = async (userId) => {
   const [trustedContacts] = await db.query(
-    "SELECT email FROM trusted_contact WHERE user_id = ?",
+    "SELECT trusted_no FROM trusted_contact WHERE user_id = ?",
     [userId]
   );
   const [legacyContacts] = await db.query(
-    "SELECT contact_email FROM contacts WHERE user_id = ?",
+    "SELECT phone FROM contacts WHERE user_id = ?",
     [userId]
   );
 
   return [
-    ...trustedContacts.map((contact) => contact.email),
-    ...legacyContacts.map((contact) => contact.contact_email),
+    ...trustedContacts.map((contact) => contact.trusted_no),
+    ...legacyContacts.map((contact) => contact.phone),
   ]
     .filter((value) => typeof value === "string" && value.trim().length > 0)
-    .map((value) => value.trim().toLowerCase())
+    .map((value) => value.replace(/[^\d+]/g, "").trim())
     .filter((value, index, array) => array.indexOf(value) === index);
+};
+
+const getCloudinaryPublicIdFromUrl = (url) => {
+  if (!url || typeof url !== "string" || !url.includes("cloudinary")) {
+    return null;
+  }
+
+  try {
+    const parsedUrl = new URL(url);
+    const uploadIndex = parsedUrl.pathname.indexOf("/upload/");
+    if (uploadIndex === -1) {
+      return null;
+    }
+
+    let publicPath = parsedUrl.pathname.slice(uploadIndex + "/upload/".length);
+    publicPath = publicPath.replace(/^v\d+\//, "");
+    return publicPath.replace(/\.[^/.]+$/, "");
+  } catch (error) {
+    console.log("Unable to parse Cloudinary URL:", error);
+    return null;
+  }
 };
 
 const startEmergency = async (req, res) => {
@@ -187,32 +208,15 @@ const triggerEmergencyProtocol = async (req, res) => {
 
     const recipients = await getEmergencyRecipients(user_id);
     if (recipients.length > 0) {
-      const subject = `SHEILD Emergency Evidence: ${(risk_level || "HIGH").toUpperCase()} RISK`;
-      const text = `Emergency evidence captured for ${user.email}.
+      const text = `SHEILD Emergency Evidence: ${(risk_level || "HIGH").toUpperCase()} RISK
+Emergency evidence captured for ${user.email}.
 Trigger: ${keyword || "High-risk detected"}
 Location: ${location_link || "Unavailable"}
 Recording URL: ${recording_url}
 Device: ${device_id || "Unknown"}
 `;
 
-      const html = `<h3>SHEILD Emergency Evidence</h3>
-        <p><strong>User:</strong> ${user.email}</p>
-        <p><strong>Risk level:</strong> ${(risk_level || "HIGH").toUpperCase()}</p>
-        <p><strong>Trigger:</strong> ${keyword || "High-risk detected"}</p>
-        <p><strong>Location:</strong> ${
-          location_link
-            ? `<a href="${location_link}">${location_link}</a>`
-            : "Unavailable"
-        }</p>
-        <p><strong>Recording URL:</strong> <a href="${recording_url}">${recording_url}</a></p>
-        <p><strong>Device:</strong> ${device_id || "Unknown"}</p>`;
-
-      await sendMail({
-        to: recipients,
-        subject,
-        text,
-        html,
-      });
+      await sendSmsToMany(recipients, text);
 
       if (emergencyId) {
         await db.query(
@@ -273,6 +277,25 @@ const deleteRecording = async (req, res) => {
   const { id } = req.params;
 
   try {
+    const [recordings] = await db.query(
+      "SELECT id, url FROM emergency_recordings WHERE id = ?",
+      [id]
+    );
+
+    if (recordings.length === 0) {
+      return res.status(404).json({ success: false, message: "Recording not found" });
+    }
+
+    const recording = recordings[0];
+    const publicId = getCloudinaryPublicIdFromUrl(recording.url);
+    let cloudinaryResult = null;
+
+    if (publicId) {
+      cloudinaryResult = await cloudinary.uploader.destroy(publicId, {
+        resource_type: "video",
+      });
+    }
+
     const [result] = await db.query(
       "DELETE FROM emergency_recordings WHERE id = ?",
       [id]
@@ -282,9 +305,44 @@ const deleteRecording = async (req, res) => {
       return res.status(404).json({ success: false, message: "Recording not found" });
     }
 
-    return res.json({ success: true, message: "Recording deleted" });
+    await db.query(
+      "UPDATE emergency_incidents SET recording_url = NULL, cloudinary_public_id = NULL WHERE recording_url = ?",
+      [recording.url]
+    );
+
+    return res.json({
+      success: true,
+      message: "Recording deleted",
+      cloudinary: cloudinaryResult,
+    });
   } catch (error) {
     console.error("Error deleting recording:", error);
+    return res.status(500).json({ success: false, message: "Internal server error" });
+  }
+};
+
+const renameRecording = async (req, res) => {
+  const { id } = req.params;
+  const { filename } = req.body;
+  const cleanedFilename = typeof filename === "string" ? filename.trim() : "";
+
+  if (!cleanedFilename) {
+    return res.status(400).json({ success: false, message: "filename is required" });
+  }
+
+  try {
+    const [result] = await db.query(
+      "UPDATE emergency_recordings SET filename = ? WHERE id = ?",
+      [cleanedFilename, id]
+    );
+
+    if (result.affectedRows === 0) {
+      return res.status(404).json({ success: false, message: "Recording not found" });
+    }
+
+    return res.json({ success: true, message: "Recording renamed", filename: cleanedFilename });
+  } catch (error) {
+    console.error("Error renaming recording:", error);
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 };
@@ -315,5 +373,6 @@ module.exports = {
   triggerEmergencyProtocol,
   getRecordingsByEmail,
   deleteRecording,
+  renameRecording,
   deleteCloudinaryAsset,
 };

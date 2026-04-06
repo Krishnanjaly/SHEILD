@@ -68,6 +68,9 @@ const KEYWORD_TRIGGER_ONLY_MODE = false;
 const SHAKE_SAMPLE_WINDOW = 16;
 const SHAKE_ANALYSIS_COOLDOWN_MS = 4000;
 const SHAKE_MIN_TRIGGER_SAMPLES = 4;
+const EVIDENCE_RECORDING_DURATION_MS = 60 * 60 * 1000;
+const EVIDENCE_RECORDING_DURATION_SECONDS = EVIDENCE_RECORDING_DURATION_MS / 1000;
+const RECORDING_DISABLE_WINDOW_SECONDS = 10;
 
 const Device = { osBuildId: "mock-device-id" };
 const ReactNativeForegroundService = {
@@ -147,6 +150,7 @@ export default function EmergencyMonitor() {
 
     // HIGH RISK modal    // High-risk warning modal
     const [showHighWarning, setShowHighWarning] = useState(false);
+    const [highRiskWarningMessage, setHighRiskWarningMessage] = useState("High Risk Situation Detected");
     const [highCountdown, setHighCountdown] = useState(10);
     const [showContactCalling, setShowContactCalling] = useState(false);
     const [callingContactName, setCallingContactName] = useState('');
@@ -171,6 +175,9 @@ export default function EmergencyMonitor() {
 
     // Camera recording
     const [showCamera, setShowCamera] = useState(false);
+    const [showRecordingChoice, setShowRecordingChoice] = useState(false);
+    const [recordingDisableCountdown, setRecordingDisableCountdown] = useState(RECORDING_DISABLE_WINDOW_SECONDS);
+    const [evidenceRecordingType, setEvidenceRecordingType] = useState<'video' | 'audio' | null>(null);
     const [cameraFacing, setCameraFacing] = useState<CameraType>('back');
     const [isRecording, setIsRecording] = useState(false);
     const [uploadStatus, setUploadStatus] = useState('');
@@ -180,6 +187,10 @@ export default function EmergencyMonitor() {
     const [showActiveCallCountdown, setShowActiveCallCountdown] = useState(false);
     const [activeCallCountdown, setActiveCallCountdown] = useState(15);
     const recordingSessionIdRef = useRef<string | null>(null);
+    const pendingRecordingEmergencyIdRef = useRef<number | undefined>(undefined);
+    const recordingStopTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const recordingChoiceTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const recordingChoiceIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
     useSpeechRecognitionEvent("result", (event) => {
         const transcripts =
@@ -760,6 +771,18 @@ export default function EmergencyMonitor() {
         }
     };
 
+    const clearRecordingChoiceTimers = () => {
+        if (recordingChoiceTimeoutRef.current) {
+            clearTimeout(recordingChoiceTimeoutRef.current);
+            recordingChoiceTimeoutRef.current = null;
+        }
+
+        if (recordingChoiceIntervalRef.current) {
+            clearInterval(recordingChoiceIntervalRef.current);
+            recordingChoiceIntervalRef.current = null;
+        }
+    };
+
     const beginHighRiskRecording = async (emergencyIdOverride?: number) => {
         if (!recordingSessionIdRef.current) {
             const nextSessionId = `emergency-${emergencyIdOverride ?? currentEmergencyIdRef.current ?? Date.now()}`;
@@ -771,7 +794,33 @@ export default function EmergencyMonitor() {
             recordingSessionIdRef.current = nextSessionId;
         }
 
-        await startHighRiskRecording(emergencyIdOverride);
+        pendingRecordingEmergencyIdRef.current = emergencyIdOverride;
+
+        if (stealthModeEnabledRef.current) {
+            await startHighRiskRecording(emergencyIdOverride, false);
+            return;
+        }
+
+        clearRecordingChoiceTimers();
+        setRecordingDisableCountdown(RECORDING_DISABLE_WINDOW_SECONDS);
+        setShowRecordingChoice(true);
+        let nextCountdown = RECORDING_DISABLE_WINDOW_SECONDS;
+        recordingChoiceIntervalRef.current = setInterval(() => {
+            nextCountdown -= 1;
+            setRecordingDisableCountdown(Math.max(nextCountdown, 0));
+
+            if (nextCountdown <= 0 && recordingChoiceIntervalRef.current) {
+                clearInterval(recordingChoiceIntervalRef.current);
+                recordingChoiceIntervalRef.current = null;
+            }
+        }, 1000);
+
+        recordingChoiceTimeoutRef.current = setTimeout(() => {
+            recordingChoiceTimeoutRef.current = null;
+            handleRecordingChoice(true).catch((error) => {
+                console.error("Automatic video recording start failed:", error);
+            });
+        }, RECORDING_DISABLE_WINDOW_SECONDS * 1000);
     };
 
     const getShakeThresholdFromSensitivity = useCallback((sensitivity: number) => {
@@ -1524,15 +1573,10 @@ export default function EmergencyMonitor() {
             console.log("🚨 HIGH RISK KEYWORD MATCHED:", highMatch);
             triggeredKeywordRef.current = highMatch;
             setListeningStatusText(`High keyword: ${highMatch} is detected.`);
+            setHighRiskWarningMessage(`High risk keyword "${highMatch}" is detected.`);
             ActivityService.logActivity(`KEYWORD_DETECTED_HIGH: ${triggeredKeywordRef.current}`, currentEmergencyId);
-            runMotionAnalysisSequence({
-                triggerSource: 'KEYWORD',
-                transcriptCandidates: candidates,
-                detectedLabel: `Keyword trigger: ${highMatch}`,
-            }).catch((error) => {
-                console.error("Keyword analysis sequence error:", error);
-            });
             closeListeningAfterKeywordMatch();
+            handleHighRisk();
             return;
         }
 
@@ -1596,13 +1640,11 @@ export default function EmergencyMonitor() {
             }
         }
 
-        const email = await AsyncStorage.getItem("userEmail");
         const locEnabled = await AsyncStorage.getItem("LOCATION_ENABLED");
         const locationUrl = locEnabled !== "false" ? await getLocationString() : "Location Disabled";
 
         return {
             userId: activeUserId,
-            email,
             locationUrl,
             keyword: triggeredKeywordRef.current || "Emergency",
         };
@@ -1701,18 +1743,6 @@ export default function EmergencyMonitor() {
             riskLevel: 'LOW',
             emergencyId,
         });
-
-        await EmergencyService.sendSosEmailAlert({
-            userId: context.userId,
-            email: context.email,
-            locationUrl: context.locationUrl,
-            keyword: context.keyword,
-            riskLevel: 'LOW',
-        });
-
-        if (emergencyId) {
-            await EmergencyService.logAlert(emergencyId, 'email');
-        }
     };
 
     const closeListeningAfterKeywordMatch = async () => {
@@ -1802,6 +1832,12 @@ export default function EmergencyMonitor() {
             return;
         }
 
+        setHighRiskWarningMessage(
+            triggeredKeywordRef.current
+                ? `High risk keyword "${triggeredKeywordRef.current}" is detected.`
+                : "High Risk Situation Detected"
+        );
+
         console.log("🔴 HIGH RISK KEYWORD DETECTED");
         if (stealthModeEnabledRef.current) {
             isCancelledRef.current = false;
@@ -1871,22 +1907,6 @@ export default function EmergencyMonitor() {
                 }))
         );
 
-        const emailTask = EmergencyService.sendSosEmailAlert({
-            userId: context.userId,
-            email: context.email,
-            locationUrl: context.locationUrl,
-            keyword: context.keyword,
-            riskLevel: 'HIGH',
-        })
-            .then(async () => {
-                if (emergencyId) {
-                    await EmergencyService.logAlert(emergencyId, 'email');
-                }
-            })
-            .catch((error) => {
-                console.error("High risk email alert error:", error);
-            });
-
         const calledContact = await foregroundCallService.callNearestEmergencyContact(
             contactsWithLocation,
             (contactName: string, timeRemaining: number) => {
@@ -1904,12 +1924,10 @@ export default function EmergencyMonitor() {
         setCallingContactName('');
 
         if (isCancelledRef.current) {
-            await emailTask;
             return;
         }
 
         await beginHighRiskRecording(emergencyId ?? undefined);
-        await emailTask;
     };
 
     const triggerCall = async (phone: string) => {
@@ -1943,7 +1961,7 @@ export default function EmergencyMonitor() {
         console.log("📹 Stopping video recording...");
         stopVideoRecording();
         console.log("🎤 Stopping audio recording...");
-        stopAudioRecording();
+        await stopAudioRecording({ uploadEvenIfCancelled: true });
         finishRecordingSession();
         setIsRecording(false);
         
@@ -1983,6 +2001,8 @@ export default function EmergencyMonitor() {
         // Hide camera and all modals
         console.log("📱 Hiding all UI elements...");
         setShowCamera(false);
+        setShowRecordingChoice(false);
+        setEvidenceRecordingType(null);
         setShowHighWarning(false);
         setShowLowWarning(false);
         
@@ -1994,6 +2014,8 @@ export default function EmergencyMonitor() {
             if (cancelTimeoutRef.current) clearTimeout(cancelTimeoutRef.current);
             if (timerIntervalRef.current) clearInterval(timerIntervalRef.current);
             clearListeningCountdown();
+            clearRecordingStopTimer();
+            clearRecordingChoiceTimers();
         
         // Reset all emergency states
         console.log("🔄 Resetting emergency states...");
@@ -2024,7 +2046,7 @@ export default function EmergencyMonitor() {
             currentEmergencyIdRef.current = null;
         }
 
-        await EmergencyService.sendSafeEmailAlert({
+        await EmergencyService.sendSafeSmsAlert({
             userId: safeUserId,
             email: safeEmail,
             userName: safeUserName,
@@ -2228,37 +2250,10 @@ export default function EmergencyMonitor() {
         setAiConfidence(analysis.confidence);
         setAiRiskTriggers(analysis.triggers);
         startHighRiskCountdown(() => {
-            console.log('ðŸš¨ AI HIGH RISK CONFIRMED - Starting emergency workflow!');
+            console.log('AI HIGH RISK CONFIRMED - Starting emergency workflow!');
             triggeredKeywordRef.current = `AI Detection: ${analysis.triggers.join(', ')}`;
             return startEmergencyWorkflow();
         });
-        return;
-        
-        // Start countdown
-        let countdown = 10;
-        highTimerIntervalRef.current = setInterval(() => {
-            countdown--;
-            setHighCountdown(countdown);
-            
-            if (countdown <= 0) {
-                if (highTimerIntervalRef.current) clearInterval(highTimerIntervalRef.current);
-                setShowAiRiskAlert(false);
-                setShowHighWarning(false);
-                
-                if (!isCancelledRef.current) {
-                    console.log('🚨 AI HIGH RISK CONFIRMED - Starting emergency workflow!');
-                    triggeredKeywordRef.current = `AI Detection: ${analysis.triggers.join(', ')}`;
-                    startEmergencyWorkflow();
-                }
-            }
-        }, 1000);
-        
-        // Auto-cancel after 10 seconds if not disabled
-        highCancelTimeoutRef.current = setTimeout(() => {
-            if (highTimerIntervalRef.current) clearInterval(highTimerIntervalRef.current);
-            setShowAiRiskAlert(false);
-            setShowHighWarning(false);
-        }, 10000);
     };
     
     const triggerLowRiskAiAlert = async (
@@ -2347,6 +2342,8 @@ export default function EmergencyMonitor() {
         setShowAiRiskAlert(false);
         setShowHighWarning(false);
         setShowLowWarning(false);
+        setShowRecordingChoice(false);
+        setEvidenceRecordingType(null);
         
         // Reset AI state & Stop Active sensors
         setAiRiskLevel('NONE');
@@ -2354,6 +2351,8 @@ export default function EmergencyMonitor() {
         setAiRiskTriggers([]);
         setIsEmergencyActive(false);
         aiRiskEngine.stopFullAnalysis(); // Revert to passive mode
+        clearRecordingStopTimer();
+        clearRecordingChoiceTimers();
     };
     
     /**
@@ -2380,7 +2379,36 @@ export default function EmergencyMonitor() {
         await executeHighRiskSequence();
     };
 
-    const startHighRiskRecording = async (emergencyIdOverride?: number) => {
+    const clearRecordingStopTimer = () => {
+        if (recordingStopTimeoutRef.current) {
+            clearTimeout(recordingStopTimeoutRef.current);
+            recordingStopTimeoutRef.current = null;
+        }
+    };
+
+    const scheduleRecordingStop = (type: 'video' | 'audio') => {
+        clearRecordingStopTimer();
+        recordingStopTimeoutRef.current = setTimeout(() => {
+            if (type === 'video') {
+                stopVideoRecording();
+            } else {
+                stopAudioRecording();
+            }
+            recordingStopTimeoutRef.current = null;
+        }, EVIDENCE_RECORDING_DURATION_MS);
+    };
+
+    const handleRecordingChoice = async (recordVideo: boolean) => {
+        clearRecordingChoiceTimers();
+        setShowRecordingChoice(false);
+        await startHighRiskRecording(pendingRecordingEmergencyIdRef.current, recordVideo);
+        pendingRecordingEmergencyIdRef.current = undefined;
+    };
+
+    const startHighRiskRecording = async (
+        emergencyIdOverride?: number,
+        recordVideo: boolean = true
+    ) => {
         console.log("📹 Starting high risk video + audio recording...");
 
         if (listeningRef.current) {
@@ -2392,17 +2420,6 @@ export default function EmergencyMonitor() {
             setCurrentEmergencyId(emergencyIdOverride);
         }
 
-        // Request all permissions
-        if (!cameraPermission?.granted) {
-            const result = await requestCameraPermission();
-            if (!result.granted) {
-                console.log("Camera permission denied.");
-                // Fall back to audio-only
-                startAudioOnlyRecording();
-                return;
-            }
-        }
-
         await Audio.requestPermissionsAsync();
         await Audio.setAudioModeAsync({ 
             allowsRecordingIOS: true, 
@@ -2411,14 +2428,37 @@ export default function EmergencyMonitor() {
             playThroughEarpieceAndroid: false
         });
 
-        // Start Separate Audio Recording for redundancy/evidence
-        startAudioOnlyRecording();
+        if (!recordVideo) {
+            await startAudioOnlyRecording();
+            setIsRecording(true);
+            setEvidenceRecordingType('audio');
+            setUploadStatus('Recording audio for 1 hour...');
+            scheduleRecordingStop('audio');
+            return;
+        }
+
+        // Request all permissions
+        if (!cameraPermission?.granted) {
+            const result = await requestCameraPermission();
+            if (!result.granted) {
+                console.log("Camera permission denied.");
+                // Fall back to audio-only
+                await startAudioOnlyRecording();
+                setIsRecording(true);
+                setEvidenceRecordingType('audio');
+                setUploadStatus('Recording audio for 1 hour...');
+                scheduleRecordingStop('audio');
+                return;
+            }
+        }
 
         // Show hidden camera view for recording
         setCameraFacing('back');
         setShowCamera(true);
         setIsRecording(true);
-        setUploadStatus('Recording...');
+        setEvidenceRecordingType('video');
+        setUploadStatus('Recording video for 1 hour...');
+        scheduleRecordingStop('video');
     };
 
     // Called from CameraView once it's mounted and ready
@@ -2430,7 +2470,9 @@ export default function EmergencyMonitor() {
             console.log("▶️ Video recording started");
 
             // Record until stopVideoRecording() is called
-            const videoPromise = cameraRef.current.recordAsync();
+            const videoPromise = cameraRef.current.recordAsync({
+                maxDuration: EVIDENCE_RECORDING_DURATION_SECONDS,
+            });
 
             // Periodic check for actual black screen detection from camera feed
             const checkBlankInterval = setInterval(() => {
@@ -2491,7 +2533,9 @@ export default function EmergencyMonitor() {
                                 console.log(`📹 Restarting recording with ${newFacing} camera`);
                                 // Start recording again with new camera
                                 videoRecordingRef.current = true;
-                                cameraRef.current.recordAsync().then(result => {
+                                cameraRef.current.recordAsync({
+                                    maxDuration: EVIDENCE_RECORDING_DURATION_SECONDS,
+                                }).then(result => {
                                     if (result && result.uri && !isCancelledRef.current) {
                                         console.log("✅ Switched video saved at:", result.uri);
                                         // Upload the switched video
@@ -2541,24 +2585,27 @@ export default function EmergencyMonitor() {
         } finally {
             videoRecordingRef.current = false;
             setIsRecording(false);
+            setEvidenceRecordingType(null);
             setShowCamera(false);
             finishRecordingSession();
         }
     };
 
     const stopVideoRecording = () => {
+        clearRecordingStopTimer();
         if (cameraRef.current && videoRecordingRef.current) {
             cameraRef.current.stopRecording();
             videoRecordingRef.current = false;
         }
     };
 
-    const stopAudioRecording = async () => {
+    const stopAudioRecording = async (options?: { uploadEvenIfCancelled?: boolean }) => {
+        clearRecordingStopTimer();
         if (audioRecordingRef.current) {
             try {
                 await audioRecordingRef.current.stopAndUnloadAsync();
                 const uri = audioRecordingRef.current.getURI();
-                if (uri && !isCancelledRef.current) {
+                if (uri && (!isCancelledRef.current || options?.uploadEvenIfCancelled)) {
                     setUploadStatus('Uploading audio to Cloudinary...');
                     await uploadToCloudinary(uri, 'audio');
                 }
@@ -2567,6 +2614,7 @@ export default function EmergencyMonitor() {
             } finally {
                 audioRecordingRef.current = null;
                 setIsRecording(false);
+                setEvidenceRecordingType(null);
                 finishRecordingSession();
             }
         }
@@ -2576,6 +2624,11 @@ export default function EmergencyMonitor() {
     const startAudioOnlyRecording = async () => {
         console.log("🎙️ Starting audio-only recording as fallback...");
         try {
+            if (audioRecordingRef.current) {
+                console.log("Audio recording already active.");
+                return;
+            }
+
             // audio mode is already set in startHighRiskRecording or setup
             const recording = new Audio.Recording();
             audioRecordingRef.current = recording;
@@ -2595,8 +2648,7 @@ export default function EmergencyMonitor() {
      * uploadToCloudinary
      * Sends the recorded file to the backend /upload-recording endpoint as
      * multipart/form-data. The backend uploads to Cloudinary, saves the
-     * secure_url to MySQL (emergency_recordings table), and emails all trusted
-     * contacts with the recording link — all in one atomic request.
+     * secure_url to MySQL (emergency_recordings table) for cloud storage.
      */
     /**
      * uploadToCloudinary
@@ -2799,7 +2851,7 @@ export default function EmergencyMonitor() {
                         </View>
                         <Text style={[styles.modalTitle, { color: '#ec1313', fontSize: 24 }]}>🚨 HIGH RISK DETECTED</Text>
                         <Text style={styles.modalText}>
-                            <Text style={{ fontWeight: 'bold', color: '#fff' }}>High Risk Situation Detected</Text>{'\n'}
+                            <Text style={{ fontWeight: 'bold', color: '#fff' }}>{highRiskWarningMessage}</Text>{'\n'}
                             Emergency protocol will activate in <Text style={[styles.countdown, { color: '#ec1313' }]}>{highCountdown}s</Text>
                         </Text>
                         <Text style={styles.subText}>Press DISABLE ALERT to cancel</Text>
@@ -2813,6 +2865,64 @@ export default function EmergencyMonitor() {
 
 
             {/* ───── HIDDEN CAMERA VIEW (recording in background) ───── */}
+            <Modal visible={showRecordingChoice && !stealthModeEnabledRef.current} transparent animationType="fade">
+                <View style={styles.modalOverlay}>
+                    <View style={[styles.modalContent, styles.recordingChoiceContent]}>
+                        <View style={styles.highRiskIconWrap}>
+                            <MaterialIcons name="videocam" size={42} color="#ec1313" />
+                        </View>
+                        <Text style={[styles.modalTitle, { color: '#ec1313' }]}>Video Recording Starts Soon</Text>
+                        <Text style={styles.modalText}>
+                            Video evidence recording will start in{' '}
+                            <Text style={[styles.countdown, { color: '#ec1313' }]}>{recordingDisableCountdown}s</Text>
+                            {'\n\n'}
+                            Tap DISABLE VIDEO to record audio evidence instead.
+                        </Text>
+                        <TouchableOpacity
+                            style={[styles.recordingChoiceButton, styles.audioChoiceButton]}
+                            onPress={() => {
+                                handleRecordingChoice(false).catch((error) => {
+                                    console.error("Audio recording choice error:", error);
+                                });
+                            }}
+                        >
+                            <MaterialIcons name="videocam-off" size={20} color="#fff" />
+                            <Text style={styles.recordingChoiceButtonText}>Disable Video, Record Audio</Text>
+                        </TouchableOpacity>
+                    </View>
+                </View>
+            </Modal>
+
+            <Modal
+                visible={evidenceRecordingType === 'audio' && !showRecordingChoice && !stealthModeEnabledRef.current}
+                transparent
+                animationType="fade"
+            >
+                <View style={styles.modalOverlay}>
+                    <View style={[styles.modalContent, styles.audioRecordingContent]}>
+                        <View style={styles.audioRecordingIconWrap}>
+                            <MaterialIcons name="mic" size={40} color="#22c55e" />
+                        </View>
+                        <Text style={[styles.modalTitle, { color: '#22c55e' }]}>Audio Recording Active</Text>
+                        <Text style={styles.modalText}>
+                            SHEILD is recording emergency audio evidence and will upload it to cloud storage.
+                        </Text>
+                        <Text style={styles.subText}>Recording will stop automatically after 1 hour.</Text>
+                        <TouchableOpacity
+                            style={[styles.cancelBtn, styles.safeAudioBtn]}
+                            onPress={() => {
+                                handleIAmSafe().catch((error) => {
+                                    console.error("I Am Safe during audio recording failed:", error);
+                                });
+                            }}
+                        >
+                            <MaterialIcons name="verified-user" size={20} color="#fff" />
+                            <Text style={[styles.cancelBtnText, { color: '#fff' }]}>I AM SAFE</Text>
+                        </TouchableOpacity>
+                    </View>
+                </View>
+            </Modal>
+
             {showCamera && !isListening && (
                 <Modal visible={showCamera} transparent animationType="none">
                     <View style={styles.cameraOverlay}>
@@ -2933,7 +3043,9 @@ export default function EmergencyMonitor() {
                                         if (!isCancelledRef.current && showCamera && cameraRef.current) {
                                             console.log(`📹 [FORCE] Restarting recording with ${newFacing} camera`);
                                             videoRecordingRef.current = true;
-                                            cameraRef.current.recordAsync().then(result => {
+                                            cameraRef.current.recordAsync({
+                                                maxDuration: EVIDENCE_RECORDING_DURATION_SECONDS,
+                                            }).then(result => {
                                                 if (result && result.uri && !isCancelledRef.current) {
                                                     console.log("✅ [FORCE] Switched video saved at:", result.uri);
                                                     uploadToCloudinary(result.uri, 'video');
@@ -3138,7 +3250,39 @@ const styles = StyleSheet.create({
         borderColor: "rgba(236,19,19,0.4)",
         backgroundColor: "#1a0f0f",
     },
+    recordingChoiceContent: {
+        borderColor: "rgba(236,19,19,0.45)",
+        backgroundColor: "#160d0d",
+    },
+    recordingChoiceButton: {
+        width: "100%",
+        marginTop: 14,
+        paddingVertical: 15,
+        paddingHorizontal: 16,
+        borderRadius: 14,
+        flexDirection: "row",
+        alignItems: "center",
+        justifyContent: "center",
+        gap: 10,
+    },
+    videoChoiceButton: {
+        backgroundColor: "#ec1313",
+    },
+    audioChoiceButton: {
+        backgroundColor: "#3a2720",
+        borderWidth: 1,
+        borderColor: "rgba(255,255,255,0.12)",
+    },
+    recordingChoiceButtonText: {
+        color: "#fff",
+        fontSize: 14,
+        fontWeight: "800",
+    },
     listeningContent: {
+        borderColor: "rgba(34,197,94,0.45)",
+        backgroundColor: "#08140d",
+    },
+    audioRecordingContent: {
         borderColor: "rgba(34,197,94,0.45)",
         backgroundColor: "#08140d",
     },
@@ -3155,6 +3299,12 @@ const styles = StyleSheet.create({
         marginBottom: 14,
     },
     listeningIconWrap: {
+        backgroundColor: "rgba(34,197,94,0.18)",
+        padding: 16,
+        borderRadius: 50,
+        marginBottom: 14,
+    },
+    audioRecordingIconWrap: {
         backgroundColor: "rgba(34,197,94,0.18)",
         padding: 16,
         borderRadius: 50,
@@ -3218,6 +3368,11 @@ const styles = StyleSheet.create({
     highCancelBtn: {
         borderColor: "#ec1313",
         backgroundColor: "rgba(236,19,19,0.1)",
+    },
+    safeAudioBtn: {
+        borderColor: "rgba(34,197,94,0.55)",
+        backgroundColor: "#16a34a",
+        marginTop: 18,
     },
     cancelBtnText: {
         color: "#ccc",

@@ -1,5 +1,4 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import BASE_URL from "../config/api";
 import { ActivityService } from "./ActivityService";
 import { EmergencyService } from "./EmergencyService";
 import { AbnormalMovementAssessment } from "./abnormalMovementClassifier";
@@ -30,46 +29,10 @@ function isDuplicateDetection(key: string) {
 async function resolveAlertContext(
   locationResolver?: () => Promise<string>
 ) {
-  const [userId, email] = await Promise.all([
-    AsyncStorage.getItem("userId"),
-    AsyncStorage.getItem("userEmail"),
-  ]);
+  const userId = await AsyncStorage.getItem("userId");
 
   const locationUrl = locationResolver ? await locationResolver() : "Location unavailable";
-  let latitude: string | null = null;
-  let longitude: string | null = null;
-
-  if (locationUrl.includes("?q=")) {
-    const coords = locationUrl.split("?q=")[1]?.split(",") ?? [];
-    latitude = coords[0] ?? null;
-    longitude = coords[1] ?? null;
-  }
-
-  return { userId, email, locationUrl, latitude, longitude };
-}
-
-async function sendEmailAlert(params: {
-  email: string;
-  keyword: string;
-  riskLevel: "LOW" | "HIGH";
-  latitude: string | null;
-  longitude: string | null;
-}) {
-  await fetch(`${BASE_URL}/send-sos`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      email: params.email,
-      latitude: params.latitude,
-      longitude: params.longitude,
-      keyword: params.keyword,
-      risk_level: params.riskLevel,
-      live_status:
-        params.riskLevel === "HIGH"
-          ? "Emergency Mode Active"
-          : "Abnormal movement warning",
-    }),
-  });
+  return { userId, locationUrl };
 }
 
 export const abnormalMovementEmergencyService = {
@@ -83,8 +46,7 @@ export const abnormalMovementEmergencyService = {
 
     markDetection(assessment.dedupeKey);
 
-    const { userId, email, locationUrl, latitude, longitude } =
-      await resolveAlertContext(locationResolver);
+    const { userId, locationUrl } = await resolveAlertContext(locationResolver);
 
     let emergencyId: number | null = null;
     if (userId) {
@@ -96,7 +58,7 @@ export const abnormalMovementEmergencyService = {
       if (startRes?.success) {
         emergencyId = startRes.emergency_id;
         if (emergencyId !== null) {
-          await EmergencyService.logAlert(emergencyId, "email");
+          await EmergencyService.logAlert(emergencyId, "sms");
         }
       }
     }
@@ -105,16 +67,6 @@ export const abnormalMovementEmergencyService = {
       `ABNORMAL_MOVEMENT_LOW:${assessment.triggers.join(", ") || "Movement anomaly"}`,
       emergencyId
     );
-
-    if (email) {
-      await sendEmailAlert({
-        email,
-        keyword: assessment.message,
-        riskLevel: "LOW",
-        latitude,
-        longitude,
-      });
-    }
 
     if (userId) {
       await EmergencyService.sendTrustedContactAlerts({
@@ -139,8 +91,7 @@ export const abnormalMovementEmergencyService = {
 
     markDetection(assessment.dedupeKey);
 
-    const { userId, email, locationUrl, latitude, longitude } =
-      await resolveAlertContext(locationResolver);
+    const { userId, locationUrl } = await resolveAlertContext(locationResolver);
 
     let emergencyId: number | null = null;
     if (userId) {
@@ -152,7 +103,7 @@ export const abnormalMovementEmergencyService = {
       if (startRes?.success) {
         emergencyId = startRes.emergency_id;
         if (emergencyId !== null) {
-          await EmergencyService.logAlert(emergencyId, "email");
+          await EmergencyService.logAlert(emergencyId, "sms");
         }
       }
     }
@@ -161,16 +112,6 @@ export const abnormalMovementEmergencyService = {
       `ABNORMAL_MOVEMENT_HIGH:${assessment.triggers.join(", ") || "Movement anomaly"}`,
       emergencyId
     );
-
-    if (email) {
-      await sendEmailAlert({
-        email,
-        keyword: assessment.message,
-        riskLevel: "HIGH",
-        latitude,
-        longitude,
-      });
-    }
 
     if (userId) {
       await EmergencyService.sendTrustedContactAlerts({

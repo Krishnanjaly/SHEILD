@@ -19,7 +19,6 @@ import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context"
 import Svg, { Line } from "react-native-svg";
 import { AppLockStorage, AppLockType } from "../services/AppLockStorage";
 import { GuardianStateService } from "../services/GuardianStateService";
-import * as LocalAuthentication from "expo-local-authentication";
 
 const pinDigits = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "", "0", "backspace"];
 const patternNodes = Array.from({ length: 9 }, (_, index) => index);
@@ -41,8 +40,6 @@ export default function AppLockScreen() {
   const [lockType, setLockType] = useState<AppLockType>(null);
   const [savedPin, setSavedPin] = useState("");
   const [savedPattern, setSavedPattern] = useState<number[]>([]);
-  const [biometricEnabled, setBiometricEnabled] = useState(false);
-  const [isBiometricLoading, setIsBiometricLoading] = useState(false);
   const [pinInput, setPinInput] = useState("");
   const [patternInput, setPatternInput] = useState<number[]>([]);
   const [isTracking, setIsTracking] = useState(false);
@@ -58,8 +55,6 @@ export default function AppLockScreen() {
         router.replace("/dashboard");
         return;
       }
-
-      setBiometricEnabled(state.biometricEnabled === true);
 
       if (state.lockType === "PIN" && state.pin) {
         setLockType("PIN");
@@ -97,53 +92,6 @@ export default function AppLockScreen() {
   const finishUnlock = async () => {
     await GuardianStateService.ensureBackgroundGuardianForLoggedInUser();
     router.replace("/dashboard");
-  };
-
-  const handleBiometricUnlock = async () => {
-    if (!biometricEnabled || isBiometricLoading) {
-      return;
-    }
-
-    setIsBiometricLoading(true);
-    try {
-      const [hasHardware, isEnrolled] = await Promise.all([
-        LocalAuthentication.hasHardwareAsync(),
-        LocalAuthentication.isEnrolledAsync(),
-      ]);
-
-      if (!hasHardware) {
-        Alert.alert("Fingerprint Error", "Fingerprint not supported on this device");
-        return;
-      }
-
-      if (!isEnrolled) {
-        Alert.alert(
-          "Fingerprint Error",
-          "No fingerprint found. Please register fingerprint in device settings"
-        );
-        return;
-      }
-
-      const result = await LocalAuthentication.authenticateAsync({
-        promptMessage: "Unlock with fingerprint",
-        cancelLabel: "Cancel",
-        disableDeviceFallback: false,
-      });
-
-      if (result.success) {
-        await finishUnlock();
-        return;
-      }
-
-      if (result.error !== "user_cancel" && result.error !== "system_cancel") {
-        Alert.alert("Fingerprint Error", "Authentication failed. Try again");
-      }
-    } catch (error) {
-      console.log("Fingerprint unlock failed:", error);
-      Alert.alert("Fingerprint Error", "Authentication failed. Try again");
-    } finally {
-      setIsBiometricLoading(false);
-    }
   };
 
   const handlePinPress = async (value: string) => {
@@ -336,27 +284,8 @@ export default function AppLockScreen() {
                 <Text style={styles.pinSecurityText}>Security</Text>
               </View>
               <Text style={styles.pinTitle}>Enter PIN</Text>
-              <Text style={styles.pinSubtitle}>
-                {biometricEnabled ? "Use fingerprint or PIN to continue" : "Unlock to continue"}
-              </Text>
+              <Text style={styles.pinSubtitle}>Unlock to continue</Text>
             </View>
-
-            {biometricEnabled ? (
-              <TouchableOpacity
-                style={styles.biometricButton}
-                activeOpacity={0.9}
-                onPress={() => {
-                  handleBiometricUnlock().catch(() => {});
-                }}
-              >
-                {isBiometricLoading ? (
-                  <ActivityIndicator color="#fff" />
-                ) : (
-                  <MaterialIcons name="fingerprint" size={26} color="#fff" />
-                )}
-                <Text style={styles.biometricButtonText}>Use Fingerprint</Text>
-              </TouchableOpacity>
-            ) : null}
 
             <View style={styles.dotRow}>
               {pinSlots.map((_, index) => (
@@ -409,7 +338,7 @@ export default function AppLockScreen() {
             </View>
           </View>
         </View>
-      ) : (
+      ) : lockType === "PATTERN" ? (
         <View style={styles.patternWrapper}>
           <View style={[styles.patternHeader, { paddingTop: insets.top + 16 }]}>
             <View style={styles.patternHeaderLeft}>
@@ -425,29 +354,8 @@ export default function AppLockScreen() {
                 <Text style={styles.statusText}>Security Initialization</Text>
               </View>
               <Text style={styles.patternTitle}>Draw your unlock pattern</Text>
-              <Text style={styles.patternSubtitle}>
-                {biometricEnabled
-                  ? "Use fingerprint or draw the saved pattern to open the app"
-                  : "Draw the saved pattern to open the app"}
-              </Text>
+              <Text style={styles.patternSubtitle}>Draw the saved pattern to open the app</Text>
             </View>
-
-            {biometricEnabled ? (
-              <TouchableOpacity
-                style={styles.patternBiometricButton}
-                activeOpacity={0.9}
-                onPress={() => {
-                  handleBiometricUnlock().catch(() => {});
-                }}
-              >
-                {isBiometricLoading ? (
-                  <ActivityIndicator color="#fff" />
-                ) : (
-                  <MaterialIcons name="fingerprint" size={24} color="#fff" />
-                )}
-                <Text style={styles.patternBiometricButtonText}>Use Fingerprint</Text>
-              </TouchableOpacity>
-            ) : null}
 
             <View style={styles.patternPanel}>
               <View
@@ -508,7 +416,7 @@ export default function AppLockScreen() {
             </View>
           </View>
         </View>
-      )}
+      ) : null}
     </SafeAreaView>
   );
 }
@@ -642,21 +550,19 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: "500",
   },
-  biometricButton: {
-    marginTop: 20,
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: 10,
-    backgroundColor: "rgba(236,19,19,0.86)",
+  loginFallbackButton: {
+    marginTop: 18,
     borderRadius: 18,
-    paddingHorizontal: 20,
+    borderWidth: 1,
+    borderColor: "rgba(94,63,58,0.3)",
+    paddingHorizontal: 18,
     paddingVertical: 14,
     minWidth: 220,
+    alignItems: "center",
   },
-  biometricButtonText: {
-    color: "#fff",
-    fontSize: 15,
+  loginFallbackButtonText: {
+    color: "#eedfde",
+    fontSize: 14,
     fontWeight: "800",
     textTransform: "uppercase",
     letterSpacing: 1.1,
@@ -822,24 +728,6 @@ const styles = StyleSheet.create({
     fontSize: 12,
     textAlign: "center",
     marginTop: 8,
-  },
-  patternBiometricButton: {
-    marginBottom: 22,
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: 10,
-    backgroundColor: "rgba(236,19,19,0.86)",
-    borderRadius: 18,
-    paddingHorizontal: 18,
-    paddingVertical: 12,
-  },
-  patternBiometricButtonText: {
-    color: "#fff",
-    fontSize: 14,
-    fontWeight: "800",
-    textTransform: "uppercase",
-    letterSpacing: 1,
   },
   patternPanel: {
     position: "relative",

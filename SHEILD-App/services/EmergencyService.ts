@@ -1,4 +1,6 @@
 import BASE_URL from "../config/api";
+import { NativeModules, PermissionsAndroid, Platform } from "react-native";
+import * as SMS from "expo-sms";
 
 type TrustedContact = {
     trusted_id?: number | string;
@@ -9,6 +11,12 @@ type TrustedContact = {
     latitude?: string | number;
     longitude?: string | number;
 };
+
+type AutoSmsNativeModule = {
+    sendSms: (phoneNumber: string, message: string) => Promise<boolean>;
+};
+
+const AutoSmsModule = NativeModules.AutoSmsModule as AutoSmsNativeModule | undefined;
 
 function normalizeLocationUrl(locationUrl: string) {
     if (!locationUrl || locationUrl === "Location unavailable" || locationUrl === "Location Disabled") {
@@ -39,6 +47,78 @@ function extractCoordinates(locationUrl: string) {
         latitude: Number(mapMatch[1]),
         longitude: Number(mapMatch[2]),
     };
+}
+
+function normalizePhoneNumber(value?: string | null) {
+    return String(value ?? "").replace(/[^\d+]/g, "").trim();
+}
+
+function uniquePhoneNumbers(contacts: TrustedContact[]) {
+    return contacts
+        .map((contact) => normalizePhoneNumber(contact.trusted_no))
+        .filter(Boolean)
+        .filter((value, index, array) => array.indexOf(value) === index);
+}
+
+function buildEmergencySmsMessage(params: {
+    riskLevel: "LOW" | "HIGH";
+    keyword: string | null;
+    locationUrl: string;
+    mediaUrls?: string[];
+}) {
+    const trigger = params.keyword || "Emergency";
+    const location = normalizeLocationUrl(params.locationUrl);
+    const mediaText =
+        params.mediaUrls && params.mediaUrls.length > 0
+            ? `\nMedia: ${params.mediaUrls.join(", ")}`
+            : "";
+
+    return `SHEILD ${params.riskLevel} ALERT\nTrigger: ${trigger}\nLocation: ${location}\nPlease check immediately.${mediaText}`;
+}
+
+async function ensureSmsPermission() {
+    if (Platform.OS !== "android") {
+        return true;
+    }
+
+    const permission = PermissionsAndroid.PERMISSIONS.SEND_SMS;
+    const existing = await PermissionsAndroid.check(permission);
+    if (existing) {
+        return true;
+    }
+
+    const granted = await PermissionsAndroid.request(permission, {
+        title: "SMS Permission Required",
+        message: "SHEILD needs SMS permission to alert trusted contacts during emergencies.",
+        buttonPositive: "Allow",
+    });
+
+    return granted === PermissionsAndroid.RESULTS.GRANTED;
+}
+
+async function sendSmsMessage(phoneNumber: string, message: string) {
+    const normalizedPhone = normalizePhoneNumber(phoneNumber);
+    if (!normalizedPhone) {
+        return { success: false, message: "Missing phone number" };
+    }
+
+    if (Platform.OS === "android" && AutoSmsModule?.sendSms) {
+        const hasPermission = await ensureSmsPermission();
+        if (!hasPermission) {
+            return { success: false, message: "SMS permission denied" };
+        }
+
+        await AutoSmsModule.sendSms(normalizedPhone, message);
+        return { success: true, message: "SMS sent" };
+    }
+
+    const isAvailable = await SMS.isAvailableAsync();
+    if (!isAvailable) {
+        return { success: false, message: "SMS is not available on this device" };
+    }
+
+    const result = await SMS.sendSMSAsync([normalizedPhone], message);
+    return { success: result.result === "sent" || result.result === "unknown", message: result.result };
 }
 
 export const EmergencyService = {
@@ -154,7 +234,25 @@ export const EmergencyService = {
     }) {
         try {
             const contacts = params.contacts ?? await this.getTrustedContacts(params.userId);
-            console.log("Trusted contact SMS alerts are disabled. Email-only alert flow is active.");
+            const phoneNumbers = uniquePhoneNumbers(contacts);
+            const message = buildEmergencySmsMessage({
+                riskLevel: params.riskLevel,
+                keyword: params.keyword,
+                locationUrl: params.locationUrl,
+            });
+
+            for (const phoneNumber of phoneNumbers) {
+                try {
+                    await sendSmsMessage(phoneNumber, message);
+                } catch (error) {
+                    console.error(`Failed to send emergency SMS to ${phoneNumber}:`, error);
+                }
+            }
+
+            if (params.emergencyId && phoneNumbers.length > 0) {
+                await this.logAlert(params.emergencyId, "sms");
+            }
+
             return contacts;
         } catch (e) {
             console.error("Error sending trusted contact alerts:", e);
@@ -163,55 +261,42 @@ export const EmergencyService = {
     },
 
     async sendSosEmailAlert(params: {
+        email?: string | null;
         userId?: string | null;
-        email: string | null;
         locationUrl: string;
         keyword: string | null;
         riskLevel: "LOW" | "HIGH";
-        mediaUrls?: string[];
+        emergencyId?: number | null;
+        contacts?: TrustedContact[];
     }) {
-        if (!params.email && !params.userId) {
-            return { success: false, message: "Missing user email and userId" };
-        }
-
-        try {
-            const { latitude, longitude } = extractCoordinates(params.locationUrl);
-            const response = await fetch(`${BASE_URL}/send-sos`, {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
-                    user_id: params.userId ?? null,
-                    email: params.email,
-                    latitude,
-                    longitude,
-                    keyword: params.keyword,
-                    risk_level: params.riskLevel,
-                    media_urls: params.mediaUrls ?? [],
-                }),
+        if (params.userId) {
+            return this.sendTrustedContactAlerts({
+                userId: params.userId,
+                locationUrl: params.locationUrl,
+                keyword: params.keyword,
+                riskLevel: params.riskLevel,
+                emergencyId: params.emergencyId,
+                contacts: params.contacts,
             });
-
-            const rawResponse = await response.text();
-
-            try {
-                const parsed = JSON.parse(rawResponse);
-                if (!response.ok || parsed?.success === false) {
-                    console.error("SOS email alert failed:", parsed);
-                }
-                return parsed;
-            } catch {
-                console.error("Non-JSON SOS response:", rawResponse);
-                return {
-                    success: false,
-                    message: "Unexpected response from SOS endpoint",
-                };
-            }
-        } catch (e) {
-            console.error("Error sending SOS email alert:", e);
-            return { success: false, message: "Failed to send SOS email alert" };
         }
+
+        const { latitude, longitude } = extractCoordinates(params.locationUrl);
+        const response = await fetch(`${BASE_URL}/send-sos`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                email: params.email,
+                latitude,
+                longitude,
+                keyword: params.keyword,
+                risk_level: params.riskLevel,
+            }),
+        });
+
+        return response.json();
     },
 
-    async sendSafeEmailAlert(params: {
+    async sendSafeSmsAlert(params: {
         userId?: string | null;
         email?: string | null;
         userName?: string | null;
@@ -221,34 +306,19 @@ export const EmergencyService = {
         }
 
         try {
-            const response = await fetch(`${BASE_URL}/send-safe`, {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
-                    user_id: params.userId ?? null,
-                    email: params.email ?? null,
-                    user_name: params.userName ?? null,
-                }),
-            });
+            const contacts = params.userId ? await this.getTrustedContacts(params.userId) : [];
+            const phoneNumbers = uniquePhoneNumbers(contacts);
+            const userName = params.userName || params.email || "The SHEILD user";
+            const message = `SHEILD SAFE UPDATE\n${userName} is SAFE now. Please ignore the previous emergency alert.`;
 
-            const rawResponse = await response.text();
-
-            try {
-                const parsed = JSON.parse(rawResponse);
-                if (!response.ok || parsed?.success === false) {
-                    console.error("Safe email alert failed:", parsed);
-                }
-                return parsed;
-            } catch {
-                console.error("Non-JSON safe email response:", rawResponse);
-                return {
-                    success: false,
-                    message: "Unexpected response from safe email endpoint",
-                };
+            for (const phoneNumber of phoneNumbers) {
+                await sendSmsMessage(phoneNumber, message);
             }
+
+            return { success: true, message: "Safe SMS alerts sent", recipients: phoneNumbers.length };
         } catch (e) {
-            console.error("Error sending safe email alert:", e);
-            return { success: false, message: "Failed to send safe email alert" };
+            console.error("Error sending safe SMS alert:", e);
+            return { success: false, message: "Failed to send safe SMS alert" };
         }
     },
 

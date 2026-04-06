@@ -8,13 +8,14 @@ import {
     ActivityIndicator,
     Alert,
     Modal,
+    TextInput,
 } from "react-native";
 import { MaterialIcons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import BASE_URL from "../config/api";
 import * as WebBrowser from 'expo-web-browser';
-import { Video, ResizeMode } from 'expo-av';
+import { Audio, ResizeMode, Video } from 'expo-av';
 
 export default function CloudStorage() {
     const [recordings, setRecordings] = useState<any[]>([]);
@@ -22,8 +23,81 @@ export default function CloudStorage() {
     const [refreshing, setRefreshing] = useState(false);
     const [filter, setFilter] = useState<'video' | 'audio'>('audio');
     const [playingUrl, setPlayingUrl] = useState<string | null>(null);
+    const [selectedRecording, setSelectedRecording] = useState<any | null>(null);
+    const [isAudioPlaying, setIsAudioPlaying] = useState(false);
+    const [audioLoading, setAudioLoading] = useState(false);
+    const [renameModalVisible, setRenameModalVisible] = useState(false);
+    const [renameTarget, setRenameTarget] = useState<any | null>(null);
+    const [renameText, setRenameText] = useState("");
     const videoRef = useRef<any>(null);
+    const audioSoundRef = useRef<Audio.Sound | null>(null);
     const router = useRouter();
+
+    const stopAudioPlayback = async () => {
+        if (!audioSoundRef.current) {
+            setIsAudioPlaying(false);
+            return;
+        }
+
+        try {
+            await audioSoundRef.current.stopAsync();
+            await audioSoundRef.current.unloadAsync();
+        } catch (error) {
+            console.log("Audio stop error:", error);
+        } finally {
+            audioSoundRef.current = null;
+            setIsAudioPlaying(false);
+            setAudioLoading(false);
+        }
+    };
+
+    const closePlayer = async () => {
+        await stopAudioPlayback();
+        setPlayingUrl(null);
+        setSelectedRecording(null);
+    };
+
+    const toggleAudioPlayback = async () => {
+        if (!playingUrl || selectedRecording?.type?.includes('video')) return;
+
+        if (audioSoundRef.current && isAudioPlaying) {
+            await audioSoundRef.current.pauseAsync();
+            setIsAudioPlaying(false);
+            return;
+        }
+
+        if (audioSoundRef.current) {
+            await audioSoundRef.current.playAsync();
+            setIsAudioPlaying(true);
+            return;
+        }
+
+        try {
+            setAudioLoading(true);
+            const { sound } = await Audio.Sound.createAsync(
+                { uri: playingUrl },
+                { shouldPlay: true },
+                (status) => {
+                    if (status.isLoaded && status.didJustFinish) {
+                        setIsAudioPlaying(false);
+                    }
+                }
+            );
+            audioSoundRef.current = sound;
+            setIsAudioPlaying(true);
+        } catch (error) {
+            console.error('Audio playback error:', error);
+            Alert.alert('Error', 'Unable to play this audio. It may be corrupted or in an unsupported format.');
+        } finally {
+            setAudioLoading(false);
+        }
+    };
+
+    useEffect(() => {
+        return () => {
+            audioSoundRef.current?.unloadAsync().catch(() => {});
+        };
+    }, []);
 
     const fetchRecordings = async () => {
         try {
@@ -64,7 +138,7 @@ export default function CloudStorage() {
                     onPress: async () => {
                         try {
                             // Find the recording to get its Cloudinary public_id
-                            const recording = recordings.find(r => r.id === id);
+                            const recording = null as any;
                             
                             // First delete from database
                             const res = await fetch(`${BASE_URL}/delete-recording/${id}`, {
@@ -72,7 +146,8 @@ export default function CloudStorage() {
                             });
                             
                             if (!res.ok) {
-                                throw new Error('Failed to delete from database');
+                                const data = await res.json().catch(() => null);
+                                throw new Error(data?.message || 'Failed to delete recording');
                             }
                             
                             // If recording has a Cloudinary URL, also delete from Cloudinary
@@ -124,6 +199,53 @@ export default function CloudStorage() {
                 }
             ]
         );
+    };
+
+    const openRenameModal = (recording: any) => {
+        setRenameTarget(recording);
+        setRenameText(recording.filename || (recording.type?.includes('video') ? "Video Evidence" : "Audio Evidence"));
+        setRenameModalVisible(true);
+    };
+
+    const closeRenameModal = () => {
+        setRenameModalVisible(false);
+        setRenameTarget(null);
+        setRenameText("");
+    };
+
+    const handleRename = async () => {
+        if (!renameTarget) return;
+
+        const cleanedName = renameText.trim();
+        if (!cleanedName) {
+            Alert.alert("Required", "Please enter a recording name.");
+            return;
+        }
+
+        try {
+            const res = await fetch(`${BASE_URL}/rename-recording/${renameTarget.id}`, {
+                method: "PUT",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ filename: cleanedName }),
+            });
+            const data = await res.json().catch(() => null);
+
+            if (!res.ok) {
+                throw new Error(data?.message || "Failed to rename recording");
+            }
+
+            setRecordings((prev) =>
+                prev.map((recording) =>
+                    recording.id === renameTarget.id
+                        ? { ...recording, filename: cleanedName }
+                        : recording
+                )
+            );
+            closeRenameModal();
+        } catch (error) {
+            console.error("Rename error:", error);
+            Alert.alert("Error", "Failed to rename recording. Please try again.");
+        }
     };
 
     const formatDate = (dateStr: string) => {
@@ -194,33 +316,48 @@ export default function CloudStorage() {
                         <RecordingCard
                             key={rec.id}
                             icon={rec.type.includes('video') ? "videocam" : "mic"}
-                            title={rec.type.includes('video') ? "Video Evidence" : "Audio Evidence"}
+                            title={rec.filename || (rec.type.includes('video') ? "Video Evidence" : "Audio Evidence")}
                             date={formatDate(rec.recorded_at)}
                             keyword={rec.keyword}
                             location={rec.location}
                             onDelete={() => handleDelete(rec.id)}
-                            onPlay={() => setPlayingUrl(rec.url)}
+                            onRename={() => openRenameModal(rec)}
+                            onPlay={() => {
+                                setSelectedRecording(rec);
+                                setPlayingUrl(rec.url);
+                            }}
                         />
                     ))
                 )}
             </ScrollView>
 
             {/* VIDEO/AUDIO PLAYER MODAL */}
-            <Modal visible={!!playingUrl} transparent animationType="slide" onRequestClose={() => setPlayingUrl(null)}>
+            <Modal
+                visible={!!playingUrl}
+                transparent
+                animationType="slide"
+                onRequestClose={() => {
+                    closePlayer().catch((error) => console.log("Close player error:", error));
+                }}
+            >
                 <View style={styles.playerWrapper}>
                     <View style={styles.playerContainer}>
                         <View style={styles.playerHeader}>
                             <Text style={styles.playerTitle}>
-                                {playingUrl && playingUrl.includes('video') ? 'Video Evidence' : 'Audio Evidence'}
+                                {selectedRecording?.type?.includes('video') ? 'Video Evidence' : 'Audio Evidence'}
                             </Text>
-                            <TouchableOpacity onPress={() => setPlayingUrl(null)}>
+                            <TouchableOpacity
+                                onPress={() => {
+                                    closePlayer().catch((error) => console.log("Close player error:", error));
+                                }}
+                            >
                                 <MaterialIcons name="close" size={28} color="#fff" />
                             </TouchableOpacity>
                         </View>
 
                         {playingUrl && (
                             <View style={styles.mediaContainer}>
-                                {playingUrl.includes('video') ? (
+                                {selectedRecording?.type?.includes('video') ? (
                                     <Video
                                         ref={videoRef}
                                         source={{ uri: playingUrl }}
@@ -247,15 +384,18 @@ export default function CloudStorage() {
                                 ) : (
                                     <View style={styles.audioPlayerContainer}>
                                         <MaterialIcons name="audiotrack" size={64} color="#ec1313" style={styles.audioIcon} />
-                                        <Text style={styles.audioText}>Audio Evidence Playing</Text>
-                                        <Text style={styles.audioSubText}>Audio controls are not available in this view</Text>
+                                        <Text style={styles.audioText}>Audio Evidence</Text>
+                                        <Text style={styles.audioSubText}>
+                                            {isAudioPlaying ? 'Playing in app' : 'Ready to play in app'}
+                                        </Text>
                                         <TouchableOpacity 
                                             style={styles.openInBrowserBtn}
-                                            onPress={() => {
-                                                if (playingUrl) WebBrowser.openBrowserAsync(playingUrl);
-                                            }}
+                                            onPress={() => toggleAudioPlayback().catch((error) => console.log("Audio playback error:", error))}
+                                            disabled={audioLoading}
                                         >
-                                            <Text style={styles.openInBrowserBtnText}>Play Audio in Browser</Text>
+                                            <Text style={styles.openInBrowserBtnText}>
+                                                {audioLoading ? 'Loading...' : isAudioPlaying ? 'Pause Audio' : 'Play Audio'}
+                                            </Text>
                                         </TouchableOpacity>
                                     </View>
                                 )}
@@ -268,6 +408,29 @@ export default function CloudStorage() {
                             <MaterialIcons name="open-in-browser" size={16} color="#fff" style={{ marginRight: 8 }} />
                             <Text style={styles.browserBtnText}>Open in Browser</Text>
                         </TouchableOpacity>
+                    </View>
+                </View>
+            </Modal>
+
+            <Modal visible={renameModalVisible} transparent animationType="fade" onRequestClose={closeRenameModal}>
+                <View style={styles.renameWrapper}>
+                    <View style={styles.renameContainer}>
+                        <Text style={styles.renameTitle}>Rename Recording</Text>
+                        <TextInput
+                            style={styles.renameInput}
+                            value={renameText}
+                            onChangeText={setRenameText}
+                            placeholder="Recording name"
+                            placeholderTextColor="#777"
+                        />
+                        <View style={styles.renameActions}>
+                            <TouchableOpacity style={styles.renameCancelBtn} onPress={closeRenameModal}>
+                                <Text style={styles.renameCancelText}>Cancel</Text>
+                            </TouchableOpacity>
+                            <TouchableOpacity style={styles.renameSaveBtn} onPress={handleRename}>
+                                <Text style={styles.renameSaveText}>Save</Text>
+                            </TouchableOpacity>
+                        </View>
                     </View>
                 </View>
             </Modal>
@@ -290,12 +453,13 @@ interface RecordingCardProps {
     title: string;
     date: string;
     onDelete: () => void;
+    onRename: () => void;
     onPlay: () => void;
     keyword?: string;
     location?: string;
 }
 
-function RecordingCard({ icon, title, date, onDelete, onPlay, keyword, location }: RecordingCardProps) {
+function RecordingCard({ icon, title, date, onDelete, onRename, onPlay, keyword, location }: RecordingCardProps) {
     return (
         <View style={styles.recordingCard}>
             <View style={styles.recordingLeft}>
@@ -317,6 +481,9 @@ function RecordingCard({ icon, title, date, onDelete, onPlay, keyword, location 
             <View style={styles.actionRow}>
                 <TouchableOpacity style={styles.actionBtn} onPress={onPlay}>
                     <MaterialIcons name="play-arrow" size={20} color="#ccc" />
+                </TouchableOpacity>
+                <TouchableOpacity style={styles.actionBtn} onPress={onRename}>
+                    <MaterialIcons name="edit" size={20} color="#ccc" />
                 </TouchableOpacity>
                 <TouchableOpacity style={styles.actionBtn} onPress={onDelete}>
                     <MaterialIcons name="delete" size={20} color="#ec1313" />
@@ -578,6 +745,55 @@ const styles = StyleSheet.create({
         borderRadius: 25,
     },
     openInBrowserBtnText: {
+        color: '#fff',
+        fontWeight: 'bold',
+    },
+    renameWrapper: {
+        flex: 1,
+        backgroundColor: 'rgba(0,0,0,0.75)',
+        justifyContent: 'center',
+        alignItems: 'center',
+        padding: 24,
+    },
+    renameContainer: {
+        width: '100%',
+        backgroundColor: '#2a1b1b',
+        borderRadius: 20,
+        padding: 20,
+    },
+    renameTitle: {
+        color: '#fff',
+        fontSize: 18,
+        fontWeight: 'bold',
+        marginBottom: 14,
+    },
+    renameInput: {
+        backgroundColor: '#1f1f1f',
+        borderRadius: 14,
+        color: '#fff',
+        padding: 14,
+        marginBottom: 18,
+    },
+    renameActions: {
+        flexDirection: 'row',
+        justifyContent: 'flex-end',
+    },
+    renameCancelBtn: {
+        paddingHorizontal: 18,
+        paddingVertical: 12,
+        marginRight: 10,
+    },
+    renameCancelText: {
+        color: '#aaa',
+        fontWeight: 'bold',
+    },
+    renameSaveBtn: {
+        backgroundColor: '#ec1313',
+        borderRadius: 12,
+        paddingHorizontal: 22,
+        paddingVertical: 12,
+    },
+    renameSaveText: {
         color: '#fff',
         fontWeight: 'bold',
     },

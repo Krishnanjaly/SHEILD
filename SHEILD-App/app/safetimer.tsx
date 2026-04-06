@@ -9,11 +9,10 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { MaterialIcons } from "@expo/vector-icons";
 import { useState } from "react";
 import { useRouter } from "expo-router";
-import * as MailComposer from "expo-mail-composer";
 import * as Location from "expo-location";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useEffect, useRef } from "react";
-import BASE_URL from "../config/api";
+import { EmergencyService } from "../services/EmergencyService";
 
 export default function SafeTimer() {
     const router = useRouter();
@@ -74,75 +73,45 @@ export default function SafeTimer() {
 
                 setIsRunning(false);
 
-                await triggerEmergencyEmail(); // 🚨 AUTO SEND
+                await triggerEmergencySms();
             }
 
         }, 1000);
     };
 
 
-    const triggerEmergencyEmail = async () => {
+    const triggerEmergencySms = async () => {
         try {
-            const userEmail = await AsyncStorage.getItem("userEmail");
+            const userId = await AsyncStorage.getItem("userId");
 
-            if (!userEmail) {
+            if (!userId) {
                 alert("User not logged in");
                 return;
             }
 
-            // 1️⃣ Fetch trusted contacts
-            const response = await fetch(
-                `${BASE_URL}/contacts/${userEmail}`
-            );
-
-            const data = await response.json();
-
-            const contactsArray = Array.isArray(data)
-                ? data
-                : Array.isArray(data.contacts)
-                    ? data.contacts
-                    : [];
-
-            const emailList = contactsArray
-                .map((c: any) => c.contact_email)
-                .filter(Boolean);
-
-            if (emailList.length === 0) {
-                alert("No trusted contacts found");
-                return;
-            }
-
-            // 2️⃣ Get live location
             const { status } = await Location.requestForegroundPermissionsAsync();
             if (status !== "granted") return;
 
             const loc = await Location.getCurrentPositionAsync({});
             const mapsLink = `https://www.google.com/maps?q=${loc.coords.latitude},${loc.coords.longitude}`;
 
-            // 3️⃣ Call backend API
-            const emergencyResponse = await fetch(
-                `${BASE_URL}/send-emergency`,
-                {
-                    method: "POST",
-                    headers: {
-                        "Content-Type": "application/json",
-                    },
-                    body: JSON.stringify({
-                        recipients: emailList,
-                        location: mapsLink,
-                    }),
-                }
-            );
+            const startRes = await EmergencyService.startEmergency(userId, "SAFE TIMER", mapsLink);
+            await EmergencyService.sendTrustedContactAlerts({
+                userId,
+                locationUrl: mapsLink,
+                keyword: "SAFE TIMER",
+                riskLevel: "HIGH",
+                emergencyId: startRes?.success ? startRes.emergency_id : undefined,
+            });
 
-            if (!emergencyResponse.ok) {
-                alert("Failed to send emergency email");
-                return;
+            if (startRes?.success) {
+                await EmergencyService.logAlert(startRes.emergency_id, "sms");
             }
 
             alert("🚨 Emergency alert sent automatically!");
 
         } catch (error) {
-            console.log("Emergency API Error:", error);
+            console.log("Emergency SMS Error:", error);
             alert("Emergency system failed");
         }
     };

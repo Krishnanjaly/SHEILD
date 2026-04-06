@@ -105,6 +105,7 @@ export default function Settings() {
             setLockType(null);
         }
         await AppLockStorage.setEnabled(value);
+        DeviceEventEmitter.emit("STATUS_TOGGLE_CHANGED");
     };
 
     const handleKeywordToggle = async (value: boolean) => {
@@ -173,10 +174,6 @@ export default function Settings() {
         router.push("/set-pattern");
     };
 
-    const handleSetFingerprint = () => {
-        router.push("/set-fingerprint");
-    };
-
     useEffect(() => {
         loadSettings().catch((error) => {
             console.log("Failed to load settings:", error);
@@ -185,9 +182,10 @@ export default function Settings() {
 
     useFocusEffect(
         useCallback(() => {
-            loadSettings().catch((error) => {
-                console.log("Failed to refresh settings:", error);
-            });
+            loadSettings()
+                .catch((error) => {
+                    console.log("Failed to refresh settings:", error);
+                });
         }, [loadSettings])
     );
 
@@ -326,14 +324,6 @@ export default function Settings() {
                             >
                                 <MaterialIcons name="gesture" size={22} color="#EC1313" />
                                 <Text style={styles.keywordText}>Set Pattern</Text>
-                            </TouchableOpacity>
-
-                            <TouchableOpacity
-                                style={styles.keywordOption}
-                                onPress={handleSetFingerprint}
-                            >
-                                <MaterialIcons name="fingerprint" size={22} color="#EC1313" />
-                                <Text style={styles.keywordText}>Set Fingerprint</Text>
                             </TouchableOpacity>
 
                             <View style={styles.appLockStatus}>

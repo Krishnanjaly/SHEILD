@@ -8,7 +8,7 @@ import {
 import { useEffect, useRef } from "react";
 import { useRouter } from "expo-router";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import BASE_URL from "../config/api";
+import { EmergencyService } from "../services/EmergencyService";
 
 export default function EmergencyScreen() {
     const router = useRouter();
@@ -25,22 +25,22 @@ export default function EmergencyScreen() {
 
     const handleSafe = async () => {
         const email = await AsyncStorage.getItem("userEmail");
+        const userId = await AsyncStorage.getItem("userId");
+        const userName =
+            (await AsyncStorage.getItem("userName")) ||
+            (await AsyncStorage.getItem("userFullName")) ||
+            email;
 
         try {
-            const response = await fetch(
-                `${BASE_URL}/cancel-sos`,
-                {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ email }),
-                }
-            );
+            const result = await EmergencyService.sendSafeSmsAlert({
+                userId,
+                email,
+                userName,
+            });
+            console.log("Safe SMS Response:", result);
 
-            const data = await response.json();
-            console.log("Cancel SOS Response:", data);
-
-            if (!response.ok) {
-                alert(data.message || "Failed to notify contacts");
+            if (!result.success) {
+                alert(result.message || "Failed to notify contacts");
                 return;
             }
 

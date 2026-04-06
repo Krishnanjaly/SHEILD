@@ -273,8 +273,6 @@ export default function Dashboard() {
 
   const handleSOS = async () => {
     try {
-      const email = await AsyncStorage.getItem("userEmail");
-
       ActivityService.logActivity('Manual SOS Triggered via Long Press');
 
       // 1️⃣ Get location permission
@@ -353,11 +351,11 @@ export default function Dashboard() {
         }
       }
 
-      // 4️⃣ Send alert to backend (automatic email notification to trusted contacts)
+      // 4️⃣ Send SMS alert to trusted contacts
       // and start emergency record in database
       const startRes = await EmergencyService.startEmergency(userId, "MANUAL SOS", mapLink);
       if (startRes.success) {
-          await EmergencyService.logAlert(startRes.emergency_id, 'email');
+          await EmergencyService.logAlert(startRes.emergency_id, 'sms');
           await ActivityService.logActivity("SOS_TRIGGERED_MANUAL", startRes.emergency_id);
           await EmergencyService.sendTrustedContactAlerts({
             userId,
@@ -376,20 +374,6 @@ export default function Dashboard() {
             contacts,
           });
       }
-
-      await fetch(`${BASE_URL}/send-sos`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          email,
-          latitude: lat,
-          longitude: lon,
-          keyword: "MANUAL SOS",
-          risk_level: "HIGH",
-        }),
-      });
 
       console.log("Emergency alert sent successfully.");
 
@@ -443,6 +427,10 @@ export default function Dashboard() {
         },
       ]
     );
+  };
+
+  const openSettings = async () => {
+    router.push("/settings");
   };
 
 
@@ -656,7 +644,9 @@ export default function Dashboard() {
         <NavItem
           icon="settings"
           label="Settings"
-          onPress={() => router.push("/settings")}
+          onPress={() => {
+            openSettings().catch(console.error);
+          }}
         />
       </View>
 

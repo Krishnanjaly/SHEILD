@@ -62,8 +62,7 @@ app.get("/generate-signature", (req, res) => {
   });
 });
 
-const { sendSafeEmail } = require("./services/alertService");
-const { sendMail, assertMailConfig } = require("./services/mailer");
+const { sendSmsToMany } = require("./services/smsService");
 
 app.post("/send-sos", async (req, res) => {
   try {
@@ -82,7 +81,7 @@ app.post("/send-sos", async (req, res) => {
       });
     }
 
-    console.log("[MAIL_API] /send-sos request received", {
+    console.log("[SMS_API] /send-sos request received", {
       userId: normalizedUserId,
       email: normalizedEmail,
       riskLevel: risk_level || "HIGH",
@@ -112,7 +111,7 @@ app.post("/send-sos", async (req, res) => {
     }
 
     if (users.length === 0) {
-      console.log("[MAIL_API] /send-sos user lookup failed", {
+      console.log("[SMS_API] /send-sos user lookup failed", {
         userId: normalizedUserId,
         email: normalizedEmail,
       });
@@ -122,31 +121,29 @@ app.post("/send-sos", async (req, res) => {
     const userId = users[0].id;
     const userEmail = users[0].email;
     const [trustedContacts] = await db.query(
-      "SELECT email FROM trusted_contact WHERE user_id = ?",
+      "SELECT trusted_no FROM trusted_contact WHERE user_id = ?",
       [userId]
     );
     const [legacyContacts] = await db.query(
-      "SELECT contact_email FROM contacts WHERE user_id = ?",
+      "SELECT phone FROM contacts WHERE user_id = ?",
       [userId]
     );
 
     const uniqueRecipients = [
-      ...trustedContacts.map((c) => c.email),
-      ...legacyContacts.map((c) => c.contact_email),
+      ...trustedContacts.map((c) => c.trusted_no),
+      ...legacyContacts.map((c) => c.phone),
     ]
       .filter((value) => typeof value === "string" && value.trim().length > 0)
-      .map((value) => value.trim().toLowerCase())
+      .map((value) => value.replace(/[^\d+]/g, "").trim())
       .filter((value, index, array) => array.indexOf(value) === index);
 
     if (uniqueRecipients.length === 0) {
-      console.log("[MAIL_API] /send-sos no trusted recipients", {
+      console.log("[SMS_API] /send-sos no trusted recipients", {
         userId,
         userEmail,
       });
-      return res.json({ success: true, message: "No trusted emails to notify" });
+      return res.json({ success: true, message: "No trusted phone numbers to notify" });
     }
-
-    assertMailConfig();
 
     const keywordText = keyword || "MANUAL SOS";
     const timestampText = new Date().toISOString();
@@ -155,53 +152,32 @@ app.post("/send-sos", async (req, res) => {
       ? media_urls.filter((value) => typeof value === "string" && value.trim().length > 0)
       : [];
     const mediaText = mediaUrls.length > 0 ? mediaUrls.join("\n") : "No media attached yet";
-    const mediaHtml =
-      mediaUrls.length > 0
-        ? `<p><strong>Media URLs:</strong></p><ul>${mediaUrls
-            .map((url) => `<li><a href="${url}">${url}</a></li>`)
-            .join("")}</ul>`
-        : `<p><strong>Media URLs:</strong> No media attached yet</p>`;
 
-    const mailOptions = {
-      to: uniqueRecipients,
-      subject: `EMERGENCY ALERT FROM SHEILD: ${riskLevel} RISK`,
-      text: `Urgent! A ${riskLevel} security risk was detected for ${userEmail}.
+    const smsMessage = `SHEILD ${riskLevel} ALERT
 Trigger: ${keywordText}
-Live location: ${locationText}
-Timestamp: ${timestampText}
-Media URLs:
-${mediaText}
-Please check on the user immediately.`,
-      html: `<h3>SHEILD EMERGENCY ALERT</h3>
-             <p>A <strong>${riskLevel} risk</strong> was detected for the user associated with <strong>${userEmail}</strong>.</p>
-             <p><strong>Trigger:</strong> ${keywordText}</p>
-             <p><strong>Timestamp:</strong> ${timestampText}</p>
-             ${
-               mapUrl
-                 ? `<p><strong>Live location:</strong> <a href="${mapUrl}">${mapUrl}</a></p>`
-                 : `<p><strong>Live location:</strong> unavailable</p>`
-             }
-             ${mediaHtml}
-             <p><em>Check on your contact immediately. This is an automated alert.</em></p>`,
-    };
+Location: ${locationText}
+Time: ${timestampText}
+Media: ${mediaText}
+Please check on the user immediately.`;
 
-    await sendMail(mailOptions);
-    console.log("[MAIL_API] /send-sos send completed", {
+    const smsResult = await sendSmsToMany(uniqueRecipients, smsMessage);
+    console.log("[SMS_API] /send-sos send completed", {
       userId,
       userEmail,
-      recipients: uniqueRecipients.length,
+      recipients: smsResult.sent,
       riskLevel,
     });
     res.json({
       success: true,
-      message: "Emergency emails sent successfully",
-      recipients: uniqueRecipients.length,
+      message: "Emergency SMS alerts sent successfully",
+      recipients: smsResult.sent,
+      failed: smsResult.failed,
     });
   } catch (error) {
-    console.error("SOS Email error:", error);
+    console.error("SOS SMS error:", error);
     res.status(500).json({
       success: false,
-      message: "Failed to send SOS emails",
+      message: "Failed to send SOS SMS alerts",
       error: error.message,
       code: error.code || null,
       command: error.command || null,
@@ -227,7 +203,7 @@ app.post("/send-safe", async (req, res) => {
       });
     }
 
-    console.log("[MAIL_API] /send-safe request received", {
+    console.log("[SMS_API] /send-safe request received", {
       userId: normalizedUserId,
       email: normalizedEmail,
       hasUserName: typeof user_name === "string" && user_name.trim().length > 0,
@@ -242,7 +218,7 @@ app.post("/send-safe", async (req, res) => {
     }
 
     if (users.length === 0) {
-      console.log("[MAIL_API] /send-safe user lookup failed", {
+      console.log("[SMS_API] /send-safe user lookup failed", {
         userId: normalizedUserId,
         email: normalizedEmail,
       });
@@ -251,53 +227,55 @@ app.post("/send-safe", async (req, res) => {
 
     const user = users[0];
     const [trustedContacts] = await db.query(
-      "SELECT email FROM trusted_contact WHERE user_id = ?",
+      "SELECT trusted_no FROM trusted_contact WHERE user_id = ?",
       [user.id]
     );
     const [legacyContacts] = await db.query(
-      "SELECT contact_email FROM contacts WHERE user_id = ?",
+      "SELECT phone FROM contacts WHERE user_id = ?",
       [user.id]
     );
 
     const uniqueRecipients = [
-      ...trustedContacts.map((c) => c.email),
-      ...legacyContacts.map((c) => c.contact_email),
+      ...trustedContacts.map((c) => c.trusted_no),
+      ...legacyContacts.map((c) => c.phone),
     ]
       .filter((value) => typeof value === "string" && value.trim().length > 0)
-      .map((value) => value.trim().toLowerCase())
+      .map((value) => value.replace(/[^\d+]/g, "").trim())
       .filter((value, index, array) => array.indexOf(value) === index);
 
     if (uniqueRecipients.length === 0) {
-      console.log("[MAIL_API] /send-safe no trusted recipients", {
+      console.log("[SMS_API] /send-safe no trusted recipients", {
         userId: user.id,
         userEmail: user.email,
       });
-      return res.json({ success: true, message: "No trusted emails to notify" });
+      return res.json({ success: true, message: "No trusted phone numbers to notify" });
     }
-
-    assertMailConfig();
 
     const safeUserName =
       typeof user_name === "string" && user_name.trim().length > 0
         ? user_name.trim()
         : user.name || user.email;
 
-    await sendSafeEmail(uniqueRecipients.join(","), safeUserName);
-    console.log("[MAIL_API] /send-safe send completed", {
+    const smsResult = await sendSmsToMany(
+      uniqueRecipients,
+      `SHEILD SAFE UPDATE\n${safeUserName} is SAFE now. Please ignore the previous emergency alert.`
+    );
+    console.log("[SMS_API] /send-safe send completed", {
       userId: user.id,
       userEmail: user.email,
-      recipients: uniqueRecipients.length,
+      recipients: smsResult.sent,
     });
     res.json({
       success: true,
-      message: "Safe emails sent successfully",
-      recipients: uniqueRecipients.length,
+      message: "Safe SMS alerts sent successfully",
+      recipients: smsResult.sent,
+      failed: smsResult.failed,
     });
   } catch (error) {
-    console.error("Safe Email error:", error);
+    console.error("Safe SMS error:", error);
     res.status(500).json({
       success: false,
-      message: "Failed to send safe emails",
+      message: "Failed to send safe SMS alerts",
       error: error.message,
       code: error.code || null,
       command: error.command || null,

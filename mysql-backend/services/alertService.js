@@ -1,7 +1,15 @@
 require("dotenv").config();
-const { sendMail } = require("./mailer");
+const { sendSmsToMany } = require("./smsService");
 
-const sendEmergencyEmail = async (
+const parseRecipients = (recipients) =>
+  Array.isArray(recipients)
+    ? recipients
+    : String(recipients || "")
+        .split(",")
+        .map((value) => value.trim())
+        .filter(Boolean);
+
+const sendEmergencySms = async (
   recipients,
   location,
   userId,
@@ -9,34 +17,31 @@ const sendEmergencyEmail = async (
   riskLevel
 ) => {
   const timestamp = new Date().toLocaleString();
-  let subject = "Low Risk Alert - SHEILD Safety Notification";
-  let body = `A low-risk keyword was detected.\n\nUser ID: ${userId}\nDetected Keyword: ${
-    keyword || "Low-Risk Detected"
-  }\nTime: ${timestamp}\n\nLive Location:\n${location}\n\nThis is only a precautionary alert.`;
+  const level = riskLevel === "HIGH" ? "HIGH" : "LOW";
+  const action =
+    level === "HIGH"
+      ? "Please contact the user immediately. Calling contacts now."
+      : "This is only a precautionary alert.";
+  const body = `SHEILD ${level} ALERT
+User ID: ${userId}
+Detected Keyword: ${keyword || `${level}-Risk Detected`}
+Time: ${timestamp}
+Live Location: ${location}
+${action}`;
 
-  if (riskLevel === "HIGH") {
-    subject = "EMERGENCY ALERT - Possible danger detected";
-    body = `A high-risk keyword was detected from the SHEILD safety app.\n\nUser ID: ${userId}\nDetected Keyword: ${
-      keyword || "High-Risk Detected"
-    }\nTime: ${timestamp}\n\nLive Location:\n${location}\n\nPlease contact the user immediately. Calling contacts now.`;
-  }
-
-  return sendMail({
-    to: recipients,
-    subject,
-    text: body,
-  });
+  return sendSmsToMany(parseRecipients(recipients), body);
 };
 
-const sendSafeEmail = async (recipients, userName) => {
-  return sendMail({
-    to: recipients,
-    subject: "SHEILD ALERT CANCELLED",
-    text: `${userName} is SAFE now. Please ignore the previous emergency alert.`,
-  });
+const sendSafeSms = async (recipients, userName) => {
+  return sendSmsToMany(
+    parseRecipients(recipients),
+    `SHEILD ALERT CANCELLED\n${userName} is SAFE now. Please ignore the previous emergency alert.`
+  );
 };
 
 module.exports = {
-  sendEmergencyEmail,
-  sendSafeEmail,
+  sendEmergencySms,
+  sendSafeSms,
+  sendEmergencyEmail: sendEmergencySms,
+  sendSafeEmail: sendSafeSms,
 };

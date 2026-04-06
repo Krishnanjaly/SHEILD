@@ -103,9 +103,9 @@ export default function PhoneScreen() {
         Silent Protection. Smart Response.
       </Text>
 
-      {/* Fingerprint Circle */}
+      {/* Security Badge */}
       <View style={styles.circle}>
-        <MaterialIcons name="fingerprint" size={50} color="#ec1313" />
+        <MaterialIcons name="lock" size={50} color="#ec1313" />
       </View>
 
       {/* Login Section */}

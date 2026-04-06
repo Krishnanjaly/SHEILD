@@ -470,7 +470,7 @@ export default function CloudStorage() {
                 <NavItem icon="home" label="Home" onPress={() => router.replace("/dashboard")} />
                 <NavItem icon="group" label="Contacts" onPress={() => router.push("/contacts")} />
                 <NavItem icon="cloud" label="Storage" active />
-                <NavItem icon="map" label="SafeMap" onPress={() => router.push("/safemap")} />
+                <NavItem icon="phone-in-talk" label="Fake Call" onPress={() => router.push("/fake-call")} />
                 <NavItem icon="settings" label="Settings" onPress={() => router.push("/settings")} />
             </View>
         </View>

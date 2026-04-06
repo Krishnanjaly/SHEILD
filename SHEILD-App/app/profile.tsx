@@ -233,7 +233,7 @@ export default function Profile() {
       <View style={styles.navBar}>
         <NavItem icon="home" label="Home" onPress={() => router.replace("/dashboard")} />
         <NavItem icon="group" label="Contacts" onPress={() => router.push("/contacts")} />
-        <NavItem icon="explore" label="SafeMap" onPress={() => router.push("/safemap")} />
+        <NavItem icon="phone-in-talk" label="Fake Call" onPress={() => router.push("/fake-call")} />
         <NavItem icon="person" label="Profile" active />
       </View>
     </View>

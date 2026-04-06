@@ -608,7 +608,7 @@ export default function Dashboard() {
         <View style={styles.featureGrid}>
 
           <FeatureButton icon="group" label="Emergency Contacts" route="/contacts" />
-          <FeatureButton icon="location-on" label="Share Location" route="/safemap" />
+          <FeatureButton icon="person-pin-circle" label="Nearest Contacts" route="/safemap" />
           <FeatureButton icon="phone-in-talk" label="Fake Call" route="/fake-call" />
           <FeatureButton icon="call" label="Helpline Numbers" route="/helpline" />
           <FeatureButton icon="storage" label="Cloud Storage" route="/cloud-storage" />
@@ -636,9 +636,9 @@ export default function Dashboard() {
           onPress={() => router.push("/contacts")}
         />
         <NavItem
-          icon="map"
-          label="SafeMap"
-          onPress={() => router.push("/safemap")}
+          icon="phone-in-talk"
+          label="Fake Call"
+          onPress={() => router.push("/fake-call")}
         />
         <NavItem
           icon="settings"

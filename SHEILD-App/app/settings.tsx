@@ -365,9 +365,9 @@ export default function Settings() {
                     onPress={() => router.push("/contacts")}
                 />
                 <NavItem
-                    icon="map"
-                    label="SafeMap"
-                    onPress={() => router.push("/safemap")}
+                    icon="phone-in-talk"
+                    label="Fake Call"
+                    onPress={() => router.push("/fake-call")}
                 />
                 <NavItem
                     icon="settings"

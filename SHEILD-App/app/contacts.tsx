@@ -148,7 +148,7 @@ export default function Contacts() {
       <View style={styles.navBar}>
         <NavItem icon="home" label="Home" onPress={() => router.push("/dashboard")} />
         <NavItem icon="group" label="Contacts" active />
-        <NavItem icon="explore" label="Safe Map" onPress={() => router.push("/safemap")} />
+        <NavItem icon="phone-in-talk" label="Fake Call" onPress={() => router.push("/fake-call")} />
         <NavItem icon="settings" label="Settings" onPress={() => router.push("/settings")} />
       </View>
     </View>

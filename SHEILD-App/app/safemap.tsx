@@ -432,11 +432,11 @@ export default function SafeMap() {
         </TouchableOpacity>
       </ScrollView>
 
-      <View style={styles.bottomNav}>
-        <NavItem icon="grid-view" label="DASHBOARD" onPress={() => router.replace("/dashboard")} />
-        <NavItem icon="group" label="CONTACTS" onPress={() => router.push("/contacts")} />
-        <NavItem active icon="explore" label="MAPS" />
-        <NavItem icon="security" label="INTEL" onPress={() => router.push("/guardian")} />
+      <View style={styles.navBar}>
+        <NavItem icon="home" label="Home" onPress={() => router.replace("/dashboard")} />
+        <NavItem icon="group" label="Contacts" onPress={() => router.push("/contacts")} />
+        <NavItem icon="phone-in-talk" label="Fake Call" onPress={() => router.push("/fake-call")} />
+        <NavItem icon="settings" label="Settings" onPress={() => router.push("/settings")} />
       </View>
     </SafeAreaView>
   );
@@ -560,8 +560,8 @@ const ContactCard = ({ contact, closest, onCall, onPress, onSos, pulseScale, pul
 
 const NavItem = ({ icon, label, active, onPress }: any) => (
   <TouchableOpacity style={styles.navItem} onPress={onPress}>
-    <MaterialIcons name={icon} size={24} color={active ? "#EC1313" : "rgba(233,188,182,0.45)"} />
-    <Text style={[styles.navText, active && styles.navTextActive]}>{label}</Text>
+    <MaterialIcons name={icon} size={24} color={active ? "#ec1313" : "#777"} />
+    <Text style={[styles.navLabel, { color: active ? "#ec1313" : "#777" }]}>{label}</Text>
   </TouchableOpacity>
 );
 
@@ -863,31 +863,23 @@ const styles = StyleSheet.create({
     fontWeight: "900",
     letterSpacing: 1.8,
   },
-  bottomNav: {
+  navBar: {
     position: "absolute",
-    left: 0,
-    right: 0,
     bottom: 0,
-    height: 92,
-    paddingTop: 12,
-    paddingBottom: 18,
-    paddingHorizontal: 12,
-    borderTopLeftRadius: 24,
-    borderTopRightRadius: 24,
-    backgroundColor: "rgba(42,27,27,0.92)",
+    width: "100%",
+    height: 90,
+    backgroundColor: "#221010",
     borderTopWidth: 1,
-    borderTopColor: "rgba(94,63,58,0.28)",
+    borderTopColor: "rgba(255,255,255,0.1)",
     flexDirection: "row",
     justifyContent: "space-around",
     alignItems: "center",
   },
-  navItem: { alignItems: "center", justifyContent: "center", minWidth: 72 },
-  navText: {
-    color: "rgba(233,188,182,0.45)",
-    fontSize: 10,
-    marginTop: 5,
-    fontWeight: "900",
-    letterSpacing: 1,
+  navItem: {
+    alignItems: "center",
   },
-  navTextActive: { color: "#EC1313" },
+  navLabel: {
+    fontSize: 10,
+    marginTop: 4,
+  },
 });

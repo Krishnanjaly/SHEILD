@@ -273,6 +273,35 @@ const getRecordingsByEmail = async (req, res) => {
   }
 };
 
+const getRecordingsByUserId = async (req, res) => {
+  const { userId } = req.params;
+
+  try {
+    const [rows] = await db.query(
+      `SELECT
+          er.id,
+          er.type,
+          er.url,
+          er.filename,
+          er.recorded_at,
+          ei.detected_keyword AS keyword,
+          ei.location_url AS location
+       FROM emergency_recordings er
+       LEFT JOIN emergency_incidents ei
+         ON ei.user_id = er.user_id
+        AND ei.recording_url = er.url
+       WHERE er.user_id = ?
+       ORDER BY er.recorded_at DESC`,
+      [userId]
+    );
+
+    return res.json(rows);
+  } catch (error) {
+    console.error("Error fetching recordings by userId:", error);
+    return res.status(500).json({ success: false, message: "Internal server error" });
+  }
+};
+
 const deleteRecording = async (req, res) => {
   const { id } = req.params;
 
@@ -372,6 +401,7 @@ module.exports = {
   logCall,
   triggerEmergencyProtocol,
   getRecordingsByEmail,
+  getRecordingsByUserId,
   deleteRecording,
   renameRecording,
   deleteCloudinaryAsset,

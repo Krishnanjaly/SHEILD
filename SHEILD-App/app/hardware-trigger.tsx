@@ -154,25 +154,6 @@ export default function HardwareTrigger() {
                     to trigger a silent AI response even when the screen is locked.
                 </Text>
 
-                {/* Configuration Card */}
-                <View style={styles.configCard}>
-                    <View>
-                        <Text style={styles.configTitle}>
-                            Silent Activation
-                        </Text>
-                        <Text style={styles.configSub}>
-                            Enable hardware trigger response
-                        </Text>
-                    </View>
-
-                    <Switch
-                        value={enabled}
-                        onValueChange={handleEnabledToggle}
-                        trackColor={{ true: "#EC1313" }}
-                        thumbColor="#fff"
-                    />
-                </View>
-
                 {/* Instruction List */}
                 <View style={styles.instructionCard}>
                     <InstructionItem
@@ -183,11 +164,6 @@ export default function HardwareTrigger() {
                         onPress={() => router.push("/custom-pattern")}
                     />
 
-                    <InstructionItem
-                        icon="notifications-off"
-                        title="Silent Mode"
-                        description="No visual or audio alerts on phone"
-                    />
                 </View>
 
                 {/* Save Button */}

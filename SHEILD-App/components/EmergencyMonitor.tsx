@@ -68,15 +68,48 @@ const KEYWORD_TRIGGER_ONLY_MODE = false;
 const SHAKE_SAMPLE_WINDOW = 16;
 const SHAKE_ANALYSIS_COOLDOWN_MS = 4000;
 const SHAKE_MIN_TRIGGER_SAMPLES = 4;
-const EVIDENCE_RECORDING_DURATION_MS = 60 * 60 * 1000;
+const EVIDENCE_RECORDING_DURATION_MS = 30 * 1000;
 const EVIDENCE_RECORDING_DURATION_SECONDS = EVIDENCE_RECORDING_DURATION_MS / 1000;
+const VIDEO_SEGMENT_DURATION_SECONDS = 15;
 const RECORDING_DISABLE_WINDOW_SECONDS = 10;
+const BACK_CAMERA_BLACK_SCREEN_SWITCH_SECONDS = 5;
+const INITIAL_CAMERA_FRAME_CHECK_ATTEMPTS = 6;
+const INITIAL_CAMERA_FRAME_CHECK_DELAY_MS = 400;
+const BLACK_VIEW_FALLBACK_LUX_THRESHOLD = 12;
 
 const Device = { osBuildId: "mock-device-id" };
 const ReactNativeForegroundService = {
     update: (_options: unknown) => {
         // Foreground service integration removed for EAS compatibility.
     },
+};
+
+type FrameAnalysisResult = {
+    averageBrightness: number;
+    variance: number;
+    pixelVariance: number;
+    isLowBrightness: boolean;
+    isLowVariation: boolean;
+    isBlankOrUniform: boolean;
+    sampleCount: number;
+};
+
+const FrameAnalysisModule = NativeModules.FrameAnalysisModule as
+    | {
+        analyzeBase64Frame: (base64Frame: string) => Promise<FrameAnalysisResult>;
+        analyzeVideoFile: (videoUri: string) => Promise<FrameAnalysisResult>;
+    }
+    | undefined;
+
+const isBlankOrUniformFrameAnalysis = (analysis: FrameAnalysisResult | null) => {
+    if (!analysis) {
+        return true;
+    }
+
+    const isVeryDark = analysis.averageBrightness < 160;
+    const isNearlyUniform = analysis.variance < 3000 || analysis.pixelVariance < 9000;
+
+    return analysis.isBlankOrUniform || isVeryDark || isNearlyUniform;
 };
 
 export default function EmergencyMonitor() {
@@ -113,6 +146,7 @@ export default function EmergencyMonitor() {
     const stealthModeEnabledRef = useRef(false);
     const analysisReadyRef = useRef(true);
     const lastCombinedAnalysisAtRef = useRef(0);
+    const autoSwitchingCameraRef = useRef(false);
 
     // AI Risk Detection State
     const [aiRiskLevel, setAiRiskLevel] = useState<'LOW' | 'HIGH' | 'NONE'>('NONE');
@@ -158,6 +192,7 @@ export default function EmergencyMonitor() {
     const highCancelTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const highTimerIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
     const isCancelledRef = useRef(false);
+    const uploadVideoEvenIfCancelledRef = useRef(false);
 
     const [isBackgroundMode, setIsBackgroundMode] = useState(false);
     const backgroundServiceRef = useRef<boolean>(false);
@@ -220,7 +255,12 @@ export default function EmergencyMonitor() {
     const [guardianStatus, setGuardianStatus] = useState<'PASSIVE' | 'ACTIVE' | 'EMERGENCY'>('PASSIVE');
     const cameraRef = useRef<CameraView | null>(null);
     const cameraFacingRef = useRef<CameraType>('back');
+    const initialCameraSwitchCheckedRef = useRef(false);
+    const videoStartInProgressRef = useRef(false);
     const videoRecordingRef = useRef<boolean>(false);
+    const videoRecordingCompletionRef = useRef<Promise<void> | null>(null);
+    const videoSequenceSegmentRef = useRef<'back' | 'front'>('back');
+    const pendingVideoUrisRef = useRef<string[]>([]);
     const audioRecordingRef = useRef<Audio.Recording | null>(null);
     const [cameraPermission, requestCameraPermission] = useCameraPermissions();
     const luxRef = useRef<number>(100); // Default bright
@@ -1956,10 +1996,20 @@ export default function EmergencyMonitor() {
         
         // Set cancellation flag immediately
         isCancelledRef.current = true;
+        uploadVideoEvenIfCancelledRef.current = true;
         
         // Stop all recordings
         console.log("📹 Stopping video recording...");
-        stopVideoRecording();
+        await stopVideoRecording({ waitForUpload: true });
+        if (pendingVideoUrisRef.current.length > 0) {
+            setUploadStatus('Uploading videos to Cloudinary...');
+            const urisToUpload = [...pendingVideoUrisRef.current];
+            pendingVideoUrisRef.current = [];
+            for (const uri of urisToUpload) {
+                await uploadToCloudinary(uri, 'video');
+            }
+            uploadVideoEvenIfCancelledRef.current = false;
+        }
         console.log("🎤 Stopping audio recording...");
         await stopAudioRecording({ uploadEvenIfCancelled: true });
         finishRecordingSession();
@@ -2432,7 +2482,7 @@ export default function EmergencyMonitor() {
             await startAudioOnlyRecording();
             setIsRecording(true);
             setEvidenceRecordingType('audio');
-            setUploadStatus('Recording audio for 1 hour...');
+            setUploadStatus('Recording audio for 30 seconds...');
             scheduleRecordingStop('audio');
             return;
         }
@@ -2446,18 +2496,21 @@ export default function EmergencyMonitor() {
                 await startAudioOnlyRecording();
                 setIsRecording(true);
                 setEvidenceRecordingType('audio');
-                setUploadStatus('Recording audio for 1 hour...');
+                setUploadStatus('Recording audio for 30 seconds...');
                 scheduleRecordingStop('audio');
                 return;
             }
         }
 
-        // Show hidden camera view for recording
+        initialCameraSwitchCheckedRef.current = false;
+        videoSequenceSegmentRef.current = 'back';
+        pendingVideoUrisRef.current = [];
+        cameraFacingRef.current = 'back';
         setCameraFacing('back');
         setShowCamera(true);
         setIsRecording(true);
         setEvidenceRecordingType('video');
-        setUploadStatus('Recording video for 1 hour...');
+        setUploadStatus('Recording back camera video for 15 seconds...');
         scheduleRecordingStop('video');
     };
 
@@ -2465,6 +2518,9 @@ export default function EmergencyMonitor() {
     const startVideoCapture = async () => {
         if (!cameraRef.current || videoRecordingRef.current) return;
         videoRecordingRef.current = true;
+        const recordingFacing = cameraFacingRef.current;
+        let keepCameraActiveForAutoSwitch = false;
+        let checkBlankInterval: ReturnType<typeof setInterval> | null = null;
 
         try {
             console.log("▶️ Video recording started");
@@ -2475,17 +2531,18 @@ export default function EmergencyMonitor() {
             });
 
             // Periodic check for actual black screen detection from camera feed
-            const checkBlankInterval = setInterval(() => {
+            checkBlankInterval = setInterval(() => {
                 if (!videoRecordingRef.current || !showCamera) {
                     console.log('📹 Recording stopped or camera hidden, clearing blank screen check');
-                    clearInterval(checkBlankInterval);
+                    if (checkBlankInterval) clearInterval(checkBlankInterval);
                     return;
                 }
 
                 console.log(`💡 Checking for black screen... current lux=${luxRef.current}`);
 
-                if (cameraFacingRef.current !== 'back') {
+                if (cameraFacingRef.current !== 'back' || recordingFacing !== 'back') {
                     blankScreenCounterRef.current = 0;
+                    if (checkBlankInterval) clearInterval(checkBlankInterval);
                     return;
                 }
 
@@ -2499,11 +2556,14 @@ export default function EmergencyMonitor() {
                     blankScreenCounterRef.current = 0;
                 }
 
-                // Require 2 consecutive checks before switching (2 seconds total)
-                if (blankScreenCounterRef.current >= 2) {
+                // Require 5 consecutive dark checks before switching.
+                if (blankScreenCounterRef.current >= BACK_CAMERA_BLACK_SCREEN_SWITCH_SECONDS) {
                     console.log("🌑 True black screen detected from back camera feed. Switching to FRONT camera.");
                     blankScreenCounterRef.current = 0;
                     
+                    autoSwitchingCameraRef.current = true;
+                    keepCameraActiveForAutoSwitch = true;
+
                     // Stop current recording and switch camera
                     if (cameraRef.current && videoRecordingRef.current) {
                         const newFacing: CameraType = 'front';
@@ -2520,26 +2580,24 @@ export default function EmergencyMonitor() {
                         }
                         
                         // Clear this interval
-                        clearInterval(checkBlankInterval);
+                        if (checkBlankInterval) clearInterval(checkBlankInterval);
                         
                         // Update camera facing
-                        cameraFacingRef.current = newFacing;
-                        setCameraFacing(newFacing);
                         console.log(`📹 Camera facing updated to ${newFacing}`);
                         
                         // Restart recording after a short delay
                         setTimeout(() => {
-                            if (!isCancelledRef.current && showCamera && cameraRef.current) {
+                            if (!autoSwitchingCameraRef.current && !isCancelledRef.current && showCamera && cameraRef.current) {
                                 console.log(`📹 Restarting recording with ${newFacing} camera`);
                                 // Start recording again with new camera
                                 videoRecordingRef.current = true;
                                 cameraRef.current.recordAsync({
                                     maxDuration: EVIDENCE_RECORDING_DURATION_SECONDS,
-                                }).then(result => {
+                                }).then(async result => {
                                     if (result && result.uri && !isCancelledRef.current) {
                                         console.log("✅ Switched video saved at:", result.uri);
                                         // Upload the switched video
-                                        uploadToCloudinary(result.uri, 'video');
+                                        await uploadToCloudinary(result.uri, 'video');
                                         
                                         // Start a new black screen check for the switched recording
                                         const newCheckInterval = setInterval(() => {
@@ -2558,7 +2616,12 @@ export default function EmergencyMonitor() {
                                     }
                                 }).catch(err => {
                                     console.error('Error recording with switched camera:', err);
+                                }).finally(() => {
                                     videoRecordingRef.current = false;
+                                    setIsRecording(false);
+                                    setEvidenceRecordingType(null);
+                                    setShowCamera(false);
+                                    finishRecordingSession();
                                 });
                             } else {
                                 console.log('📹 Cannot restart recording - cancelled or camera not available');
@@ -2569,6 +2632,15 @@ export default function EmergencyMonitor() {
             }, 1000); // Check every 1 second
 
             const videoResult = await videoPromise;
+
+            if (autoSwitchingCameraRef.current && recordingFacing === 'back') {
+                console.log("Discarding black back-camera clip and continuing with front camera recording.");
+                autoSwitchingCameraRef.current = false;
+                videoRecordingRef.current = false;
+                cameraFacingRef.current = 'front';
+                setCameraFacing('front');
+                return;
+            }
 
             if (videoResult && videoResult.uri && !isCancelledRef.current) {
                 console.log("✅ Video saved at:", videoResult.uri);
@@ -2583,6 +2655,10 @@ export default function EmergencyMonitor() {
             // Fall back to audio only
             startAudioOnlyRecording();
         } finally {
+            if (checkBlankInterval) clearInterval(checkBlankInterval);
+            if (keepCameraActiveForAutoSwitch) {
+                return;
+            }
             videoRecordingRef.current = false;
             setIsRecording(false);
             setEvidenceRecordingType(null);
@@ -2591,11 +2667,164 @@ export default function EmergencyMonitor() {
         }
     };
 
-    const stopVideoRecording = () => {
+    const startVideoCaptureWithFrameAnalysis = async () => {
+        if (!cameraRef.current || videoRecordingRef.current || videoStartInProgressRef.current) return;
+
+        videoStartInProgressRef.current = true;
+        const segment = videoSequenceSegmentRef.current;
+
+        try {
+            if (isCancelledRef.current || !cameraRef.current) {
+                return;
+            }
+
+            videoRecordingRef.current = true;
+            setUploadStatus(`Recording ${segment} camera video for 15 seconds...`);
+            const recordingPromise = cameraRef.current.recordAsync({
+                maxDuration: VIDEO_SEGMENT_DURATION_SECONDS,
+            });
+
+            const completionPromise = recordingPromise.then(async (videoResult) => {
+                if (videoResult?.uri) {
+                    pendingVideoUrisRef.current.push(videoResult.uri);
+                }
+
+                if (isCancelledRef.current && !uploadVideoEvenIfCancelledRef.current) {
+                    pendingVideoUrisRef.current = [];
+                    return;
+                }
+
+                if (segment === 'back' && !isCancelledRef.current) {
+                    videoSequenceSegmentRef.current = 'front';
+                    cameraFacingRef.current = 'front';
+                    setUploadStatus('Switching to front camera...');
+                    videoRecordingRef.current = false;
+                    videoStartInProgressRef.current = false;
+                    setTimeout(() => {
+                        if (!isCancelledRef.current && showCamera) {
+                            setCameraFacing('front');
+                        }
+                    }, 100);
+                    return;
+                }
+
+                if (pendingVideoUrisRef.current.length > 0) {
+                    setUploadStatus('Uploading videos to Cloudinary...');
+                    const urisToUpload = [...pendingVideoUrisRef.current];
+                    pendingVideoUrisRef.current = [];
+                    for (const uri of urisToUpload) {
+                        await uploadToCloudinary(uri, 'video');
+                    }
+                }
+
+                uploadVideoEvenIfCancelledRef.current = false;
+            });
+
+            videoRecordingCompletionRef.current = completionPromise;
+            await completionPromise;
+        } catch (error) {
+            console.error("Video recording error:", error);
+            if (isCancelledRef.current) {
+                return;
+            }
+            startAudioOnlyRecording();
+        } finally {
+            videoStartInProgressRef.current = false;
+            if (segment === 'back' && videoSequenceSegmentRef.current === 'front' && !isCancelledRef.current) {
+                videoRecordingRef.current = false;
+                return;
+            }
+            videoRecordingRef.current = false;
+            setIsRecording(false);
+            setEvidenceRecordingType(null);
+            setShowCamera(false);
+            finishRecordingSession();
+            videoRecordingCompletionRef.current = null;
+        }
+    };
+
+    const shouldSwitchBackCameraBeforeRecording = async () => {
+        let analyzedFrames = 0;
+        let blankFrames = 0;
+        let failedFrames = 0;
+
+        for (let attempt = 0; attempt < INITIAL_CAMERA_FRAME_CHECK_ATTEMPTS; attempt += 1) {
+            if (!cameraRef.current || isCancelledRef.current || cameraFacingRef.current !== 'back') {
+                return false;
+            }
+
+            await new Promise((resolve) => setTimeout(resolve, INITIAL_CAMERA_FRAME_CHECK_DELAY_MS));
+
+            try {
+                const analysis = await analyzeCurrentCameraFrame();
+                if (!analysis) {
+                    failedFrames += 1;
+                    continue;
+                }
+
+                analyzedFrames += 1;
+                if (isBlankOrUniformFrameAnalysis(analysis)) {
+                    blankFrames += 1;
+                }
+
+                const shouldSwitchNow = analysis.averageBrightness < 45 || blankFrames >= 2;
+                console.log("Initial camera frame analysis:", {
+                    attempt: attempt + 1,
+                    averageBrightness: analysis.averageBrightness,
+                    variance: analysis.variance,
+                    pixelVariance: analysis.pixelVariance,
+                    isBlankOrUniform: analysis.isBlankOrUniform,
+                    blankFrames,
+                    analyzedFrames,
+                    failedFrames,
+                    shouldSwitchNow,
+                });
+
+                if (shouldSwitchNow) {
+                    return true;
+                }
+            } catch (analysisError) {
+                failedFrames += 1;
+                console.warn("Initial camera frame capture failed:", analysisError);
+            }
+        }
+
+        if (analyzedFrames > 0) {
+            const shouldSwitch = blankFrames >= Math.max(1, Math.ceil(analyzedFrames * 0.5));
+            console.log("Initial camera switch decision:", {
+                analyzedFrames,
+                blankFrames,
+                failedFrames,
+                lux: luxRef.current,
+                shouldSwitch,
+            });
+            return shouldSwitch;
+        }
+
+        const shouldSwitch = failedFrames > 0 || luxRef.current <= BLACK_VIEW_FALLBACK_LUX_THRESHOLD;
+        console.log("Initial camera switch fallback decision:", {
+            analyzedFrames,
+            blankFrames,
+            failedFrames,
+            lux: luxRef.current,
+            shouldSwitch,
+        });
+        return shouldSwitch;
+    };
+
+    const stopVideoRecording = async (options?: { waitForUpload?: boolean }) => {
         clearRecordingStopTimer();
         if (cameraRef.current && videoRecordingRef.current) {
             cameraRef.current.stopRecording();
             videoRecordingRef.current = false;
+        }
+
+        if (options?.waitForUpload && videoRecordingCompletionRef.current) {
+            try {
+                await videoRecordingCompletionRef.current;
+            } catch (error) {
+                console.log("Video completion wait error:", error);
+            }
         }
     };
 
@@ -2620,6 +2849,24 @@ export default function EmergencyMonitor() {
         }
     };
 
+
+    const analyzeCurrentCameraFrame = async () => {
+        if (!cameraRef.current || !FrameAnalysisModule?.analyzeBase64Frame) {
+            return null;
+        }
+
+        const picture = await cameraRef.current.takePictureAsync({
+            base64: true,
+            quality: 0.15,
+            skipProcessing: true,
+        });
+
+        if (!picture.base64) {
+            return null;
+        }
+
+        return FrameAnalysisModule.analyzeBase64Frame(picture.base64);
+    };
 
     const startAudioOnlyRecording = async () => {
         console.log("🎙️ Starting audio-only recording as fallback...");
@@ -2656,15 +2903,22 @@ export default function EmergencyMonitor() {
      */
     const uploadToCloudinary = async (localUri: string, type: 'video' | 'audio') => {
         try {
-            const email = await AsyncStorage.getItem("userEmail");
             const userId = await AsyncStorage.getItem("userId");
-            if (!email || !userId) {
+            if (!userId) {
+                console.warn("Cannot upload recording: missing userId");
+                setUploadStatus('Upload failed: missing user ID');
                 return;
             }
 
             // 1. Get signature from backend
             const sigRes = await fetch(`${BASE_URL}/generate-signature`);
-            const { signature, timestamp, cloud_name, api_key } = await sigRes.json();
+            const signatureData = await sigRes.json().catch(() => null);
+            if (!sigRes.ok || !signatureData?.signature || !signatureData?.timestamp || !signatureData?.cloud_name || !signatureData?.api_key) {
+                console.warn("Cloudinary signature request failed:", signatureData);
+                setUploadStatus('Upload failed: Cloudinary config');
+                return;
+            }
+            const { signature, timestamp, cloud_name, api_key } = signatureData;
 
             // 2. Prepare Direct Upload FormData
             const extension = localUri.split('.').pop() || (type === 'video' ? 'mp4' : 'm4a');
@@ -2706,7 +2960,7 @@ export default function EmergencyMonitor() {
                     console.log("Device module failed:", e);
                 }
 
-                await fetch(`${BASE_URL}/trigger-emergency-protocol`, {
+                const protocolRes = await fetch(`${BASE_URL}/trigger-emergency-protocol`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
@@ -2720,6 +2974,12 @@ export default function EmergencyMonitor() {
                         risk_level: 'HIGH',
                     }),
                 });
+                const protocolData = await protocolRes.json().catch(() => null);
+                if (!protocolRes.ok || !protocolData?.success) {
+                    console.warn("Recording uploaded to Cloudinary but was not saved to backend:", protocolData);
+                    setUploadStatus('Uploaded to Cloudinary, backend save failed');
+                    return;
+                }
 
                 // Link evidence to the emergency incident
                 const emergencyId = currentEmergencyIdRef.current;
@@ -2907,7 +3167,7 @@ export default function EmergencyMonitor() {
                         <Text style={styles.modalText}>
                             SHEILD is recording emergency audio evidence and will upload it to cloud storage.
                         </Text>
-                        <Text style={styles.subText}>Recording will stop automatically after 1 hour.</Text>
+                        <Text style={styles.subText}>Recording will stop automatically after 30 seconds.</Text>
                         <TouchableOpacity
                             style={[styles.cancelBtn, styles.safeAudioBtn]}
                             onPress={() => {
@@ -2927,11 +3187,12 @@ export default function EmergencyMonitor() {
                 <Modal visible={showCamera} transparent animationType="none">
                     <View style={styles.cameraOverlay}>
                         <CameraView
+                            key={cameraFacing}
                             ref={cameraRef}
                             style={styles.hiddenCamera}
                             facing={cameraFacing}
                             mode="video"
-                            onCameraReady={startVideoCapture}
+                            onCameraReady={startVideoCaptureWithFrameAnalysis}
                         />
                         <View style={styles.recordingBadge}>
                             <View style={styles.recordingDot} />

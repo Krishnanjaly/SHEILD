@@ -8,6 +8,7 @@ import {
     ActivityIndicator,
     Alert,
     Modal,
+    Share,
     TextInput,
 } from "react-native";
 import { MaterialIcons } from "@expo/vector-icons";
@@ -21,7 +22,7 @@ export default function CloudStorage() {
     const [recordings, setRecordings] = useState<any[]>([]);
     const [loading, setLoading] = useState(true);
     const [refreshing, setRefreshing] = useState(false);
-    const [filter, setFilter] = useState<'video' | 'audio'>('audio');
+    const [filter, setFilter] = useState<'video' | 'audio'>('video');
     const [playingUrl, setPlayingUrl] = useState<string | null>(null);
     const [selectedRecording, setSelectedRecording] = useState<any | null>(null);
     const [isAudioPlaying, setIsAudioPlaying] = useState(false);
@@ -101,12 +102,21 @@ export default function CloudStorage() {
 
     const fetchRecordings = async () => {
         try {
+            const userId = await AsyncStorage.getItem("userId");
             const email = await AsyncStorage.getItem("userEmail");
-            if (!email) return;
+            if (!userId && !email) return;
 
-            const res = await fetch(`${BASE_URL}/recordings/${email}`);
+            let res = userId
+                ? await fetch(`${BASE_URL}/recordings/user/${userId}`)
+                : null;
+
+            if ((!res || !res.ok) && email) {
+                res = await fetch(`${BASE_URL}/recordings/${email}`);
+            }
+
+            if (!res) return;
             const data = await res.json();
-            if (res.ok) {
+            if (res.ok && Array.isArray(data)) {
                 setRecordings(data);
             }
         } catch (err) {
@@ -248,6 +258,25 @@ export default function CloudStorage() {
         }
     };
 
+    const handleShare = async (recording: any) => {
+        if (!recording?.url) {
+            Alert.alert("Unavailable", "No Cloudinary link is available for this recording.");
+            return;
+        }
+
+        try {
+            const recordingType = recording.type?.includes('video') ? "video" : "audio";
+            await Share.share({
+                title: `SHEILD ${recordingType} evidence`,
+                message: `SHEILD ${recordingType} evidence: ${recording.url}`,
+                url: recording.url,
+            });
+        } catch (error) {
+            console.error("Share error:", error);
+            Alert.alert("Error", "Unable to share this recording link.");
+        }
+    };
+
     const formatDate = (dateStr: string) => {
         const d = new Date(dateStr);
         return d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
@@ -322,6 +351,7 @@ export default function CloudStorage() {
                             location={rec.location}
                             onDelete={() => handleDelete(rec.id)}
                             onRename={() => openRenameModal(rec)}
+                            onShare={() => handleShare(rec)}
                             onPlay={() => {
                                 setSelectedRecording(rec);
                                 setPlayingUrl(rec.url);
@@ -454,12 +484,13 @@ interface RecordingCardProps {
     date: string;
     onDelete: () => void;
     onRename: () => void;
+    onShare: () => void;
     onPlay: () => void;
     keyword?: string;
     location?: string;
 }
 
-function RecordingCard({ icon, title, date, onDelete, onRename, onPlay, keyword, location }: RecordingCardProps) {
+function RecordingCard({ icon, title, date, onDelete, onRename, onShare, onPlay, keyword, location }: RecordingCardProps) {
     return (
         <View style={styles.recordingCard}>
             <View style={styles.recordingLeft}>
@@ -484,6 +515,9 @@ function RecordingCard({ icon, title, date, onDelete, onRename, onPlay, keyword,
                 </TouchableOpacity>
                 <TouchableOpacity style={styles.actionBtn} onPress={onRename}>
                     <MaterialIcons name="edit" size={20} color="#ccc" />
+                </TouchableOpacity>
+                <TouchableOpacity style={styles.actionBtn} onPress={onShare}>
+                    <MaterialIcons name="share" size={20} color="#ccc" />
                 </TouchableOpacity>
                 <TouchableOpacity style={styles.actionBtn} onPress={onDelete}>
                     <MaterialIcons name="delete" size={20} color="#ec1313" />

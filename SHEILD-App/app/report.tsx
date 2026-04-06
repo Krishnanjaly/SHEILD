@@ -65,7 +65,6 @@ export default function About() {
                 <View style={styles.featureGrid}>
                     <Feature icon="sos" label="Emergency SOS" />
                     <Feature icon="location-on" label="Live Location" />
-                    <Feature icon="timer" label="Safety Timer" />
                     <Feature icon="settings-remote" label="Hardware Trigger" />
                     <Feature icon="psychology" label="AI Guardian" />
                     <Feature icon="group" label="Trusted Contacts" />

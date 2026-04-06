@@ -46,7 +46,7 @@ export default function PreviousActivityScreen() {
     };
 
     const getLevelColor = (level: string | undefined) => {
-        if (!level) return "#13ec5b"; 
+        if (!level) return "#13ec5b";
         if (level === 'HIGH') return "#ec1313";
         if (level === 'LOW') return "#f1c40f";
         return "#13ec5b";
@@ -55,12 +55,12 @@ export default function PreviousActivityScreen() {
     return (
         <View style={styles.container}>
             <LinearGradient colors={["#1c1313", "#120c0c"]} style={StyleSheet.absoluteFill} />
-            
+
             {/* Header */}
-                <View style={styles.header}>
-                    <TouchableOpacity onPress={() => router.back()} style={styles.backBtn}>
-                        <MaterialIcons name="arrow-back" size={24} color="white" />
-                    </TouchableOpacity>
+            <View style={styles.header}>
+                <TouchableOpacity onPress={() => router.back()} style={styles.backBtn}>
+                    <MaterialIcons name="arrow-back" size={24} color="white" />
+                </TouchableOpacity>
                 <View>
                     <Text style={styles.headerTitle}>Security Activity</Text>
                     <Text style={styles.headerSub}>Past detections & alerts</Text>
@@ -89,7 +89,7 @@ export default function PreviousActivityScreen() {
                 </TouchableOpacity>
             </View>
 
-            <ScrollView 
+            <ScrollView
                 style={styles.scroll}
                 refreshControl={
                     <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#ec1313" />
@@ -105,8 +105,8 @@ export default function PreviousActivityScreen() {
                     activities.map((item, index) => {
                         const level = item.level || 'STABLE';
                         const type = item.type || item.activity_type;
-                         const title = item.title || (type === 'AI_RISK_DETECTED_HIGH' ? 'High Risk Movement' : type === 'AI_RISK_DETECTED_LOW' ? 'Suspicious Activity' : 'Security Alert');
-                        
+                        const title = item.title || (type === 'AI_RISK_DETECTED_HIGH' ? 'High Risk Movement' : type === 'AI_RISK_DETECTED_LOW' ? 'Suspicious Activity' : 'Security Alert');
+
                         return (
                             <View key={item.id} style={styles.timelineItem}>
                                 {/* Left Line */}
@@ -133,7 +133,7 @@ export default function PreviousActivityScreen() {
                                             onPress={() => {
                                                 Alert.alert(
                                                     "Delete Activity",
-                                                    "Delete this activity from the database?",
+                                                    "Delete this activity from the activity page?",
                                                     [
                                                         { text: "Cancel", style: "cancel" },
                                                         {

@@ -18,6 +18,7 @@ router.post("/emergency/evidence", emergencyController.storeEvidence);
 router.post("/emergency/alert", emergencyController.logAlert);
 router.post("/emergency/call", emergencyController.logCall);
 router.post("/trigger-emergency-protocol", emergencyController.triggerEmergencyProtocol);
+router.get("/recordings/user/:userId", emergencyController.getRecordingsByUserId);
 router.get("/recordings/:email", emergencyController.getRecordingsByEmail);
 router.put("/rename-recording/:id", emergencyController.renameRecording);
 router.delete("/delete-recording/:id", emergencyController.deleteRecording);

@@ -7,7 +7,10 @@ import com.facebook.react.uimanager.ViewManager
 
 class AutoSmsPackage : ReactPackage {
     override fun createNativeModules(reactContext: ReactApplicationContext): List<NativeModule> {
-        return listOf(AutoSmsModule(reactContext))
+        return listOf(
+            AutoSmsModule(reactContext),
+            FrameAnalysisModule(reactContext)
+        )
     }
 
     override fun createViewManagers(reactContext: ReactApplicationContext): List<ViewManager<*, *>> {

@@ -608,7 +608,6 @@ export default function Dashboard() {
         <View style={styles.featureGrid}>
 
           <FeatureButton icon="group" label="Emergency Contacts" route="/contacts" />
-          <FeatureButton icon="timer" label="Safety Timer" route="/safetimer" />
           <FeatureButton icon="location-on" label="Share Location" route="/safemap" />
           <FeatureButton icon="phone-in-talk" label="Fake Call" route="/fake-call" />
           <FeatureButton icon="call" label="Helpline Numbers" route="/helpline" />

@@ -51,6 +51,7 @@ import {
 // AI Risk Detection Thresholds
 const LOW_RISK_THRESHOLD = 3;
 const HIGH_RISK_THRESHOLD = 7;
+const LOW_RISK_AI_ALERT_MIN_CONFIDENCE = 0.3;
 
 // AI Risk Scoring Constants
 const SCORE_STRONG_SHAKE = 3;
@@ -2313,6 +2314,13 @@ export default function EmergencyMonitor() {
             reason?: string | null;
         }
     ) => {
+        if (analysis.confidence < LOW_RISK_AI_ALERT_MIN_CONFIDENCE) {
+            console.log(
+                `Skipping LOW RISK AI alert: confidence ${(analysis.confidence * 100).toFixed(0)}% is below 30%`
+            );
+            return;
+        }
+
         if (isEmergencyActive || showLowWarning || isCancelledRef.current) return;
 
         if (stealthModeEnabledRef.current) {

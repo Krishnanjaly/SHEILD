@@ -1,5 +1,6 @@
 const db = require("../config/db");
 const { sendSmsToMany } = require("../services/smsService");
+const { sendMail } = require("../services/mailer");
 
 const escapeHtml = (value) =>
   String(value ?? "")
@@ -37,6 +38,14 @@ const normalizeMapUrl = (latitude, longitude) => {
   return `https://www.google.com/maps?q=${latitude},${longitude}`;
 };
 
+const hasLiveCoordinates = (latitude, longitude) =>
+  latitude !== undefined &&
+  latitude !== null &&
+  longitude !== undefined &&
+  longitude !== null &&
+  `${latitude}`.trim() !== "" &&
+  `${longitude}`.trim() !== "";
+
 const getEmergencyContacts = async (userId) => {
   const [trustedContacts] = await db.query(
     "SELECT trusted_name, trusted_no, email FROM trusted_contact WHERE user_id = ?",
@@ -69,6 +78,35 @@ const getEmergencyContacts = async (userId) => {
   };
 };
 
+const sendQrEmailAlerts = async (emails, { user, locationUrl, timestampText }) => {
+  if (!emails.length) {
+    return { sent: 0, failed: 0, error: null };
+  }
+
+  try {
+    await sendMail({
+      to: emails,
+      subject: "SHEILD QR SOS Emergency Alert",
+      text: `SHEILD EMERGENCY ALERT: QR SOS
+A bystander triggered the user's emergency QR.
+User: ${user.name || user.email || `User ${user.id}`}
+Trigger: QR SOS
+Timestamp: ${timestampText}
+Live Location: ${locationUrl}
+Please contact the user immediately.`,
+    });
+
+    return { sent: emails.length, failed: 0, error: null };
+  } catch (error) {
+    console.error("QR SOS email alert failed:", error);
+    return {
+      sent: 0,
+      failed: emails.length,
+      error: error.message || "Email alert failed",
+    };
+  }
+};
+
 const createQrEmergency = async ({ userId, latitude, longitude }) => {
   const [users] = await db.query("SELECT id, email, name FROM users WHERE id = ?", [userId]);
   if (users.length === 0) {
@@ -76,18 +114,19 @@ const createQrEmergency = async ({ userId, latitude, longitude }) => {
   }
 
   const user = users[0];
-  const { phoneNumbers } = await getEmergencyContacts(userId);
+  const { emails, phoneNumbers } = await getEmergencyContacts(userId);
 
-  if (phoneNumbers.length === 0) {
+  if (phoneNumbers.length === 0 && emails.length === 0) {
     return {
       status: 400,
       body: {
         success: false,
-        message: "No emergency contacts configured for this user",
+        message: "No emergency phone numbers or emails configured for this user",
       },
     };
   }
 
+  const liveLocationAvailable = hasLiveCoordinates(latitude, longitude);
   const locationUrl = normalizeMapUrl(latitude, longitude);
   const [incident] = await db.query(
     "INSERT INTO emergency_incidents (user_id, detected_keyword, location_url, status) VALUES (?, 'QR_SCAN_TRIGGER', ?, 'ACTIVE')",
@@ -112,13 +151,58 @@ Timestamp: ${timestampText}
 Live Location: ${locationUrl}
 Please contact the user immediately.`;
 
-  if (phoneNumbers.length > 0) {
-    const smsResult = await sendSmsToMany(phoneNumbers, smsText);
+  const smsResult = await sendSmsToMany(phoneNumbers, smsText);
+  const emailResult = await sendQrEmailAlerts(emails, {
+    user,
+    locationUrl,
+    timestampText,
+  });
 
+  const anyAlertDelivered = smsResult.sent > 0 || emailResult.sent > 0;
+
+  if (anyAlertDelivered) {
+    if (smsResult.sent > 0) {
+      await db.query(
+        "INSERT INTO emergency_alert (emergency_id, alert_type, alert_time, delivery_status) VALUES (?, 'sms', NOW(), 'SENT')",
+        [emergencyId]
+      );
+    } else if (phoneNumbers.length > 0) {
+      await db.query(
+        "INSERT INTO emergency_alert (emergency_id, alert_type, alert_time, delivery_status) VALUES (?, 'sms', NOW(), 'FAILED')",
+        [emergencyId]
+      );
+    }
+
+    if (emailResult.sent > 0) {
+      await db.query(
+        "INSERT INTO emergency_alert (emergency_id, alert_type, alert_time, delivery_status) VALUES (?, 'email', NOW(), 'SENT')",
+        [emergencyId]
+      );
+    }
+  } else {
     await db.query(
-      "INSERT INTO emergency_alert (emergency_id, alert_type, alert_time, delivery_status) VALUES (?, 'sms', NOW(), 'SENT')",
+      "INSERT INTO emergency_alert (emergency_id, alert_type, alert_time, delivery_status) VALUES (?, 'sms', NOW(), 'FAILED')",
       [emergencyId]
     );
+
+    return {
+      status: 502,
+      body: {
+        success: false,
+        emergency_id: emergencyId,
+        message: "QR SOS was recorded, but alerts were not delivered. Check SMS/email provider configuration and contact details.",
+        smsRecipients: phoneNumbers.length,
+        smsSent: smsResult.sent,
+        smsFailed: smsResult.failed,
+        smsResults: smsResult.results,
+        emailRecipients: emails.length,
+        emailSent: emailResult.sent,
+        emailFailed: emailResult.failed,
+        emailError: emailResult.error,
+        locationUrl,
+        liveLocationAvailable,
+      },
+    };
   }
 
   return {
@@ -128,7 +212,13 @@ Please contact the user immediately.`;
       emergency_id: emergencyId,
       message: "QR SOS triggered successfully",
       smsRecipients: phoneNumbers.length,
+      smsSent: smsResult.sent,
+      smsFailed: smsResult.failed,
+      emailRecipients: emails.length,
+      emailSent: emailResult.sent,
+      emailFailed: emailResult.failed,
       locationUrl,
+      liveLocationAvailable,
     },
   };
 };
@@ -282,7 +372,14 @@ const renderQrEmergencyPage = async (req, res) => {
         throw new Error(data.message || "Unable to send SOS");
       }
 
-      setStatus("SOS SMS sent successfully to the user's emergency contacts.", "success");
+      const deliveredCount = (data.smsSent || 0) + (data.emailSent || 0);
+      const deliveryLabel = data.smsSent > 0
+        ? "SMS alert"
+        : "email alert";
+      const locationSuffix = data.liveLocationAvailable
+        ? " with live location"
+        : ". Live location was unavailable, so the alert was sent without GPS";
+      setStatus("SOS " + deliveryLabel + " sent successfully to " + deliveredCount + " contact route(s)" + locationSuffix + ".", "success");
       button.disabled = true;
       button.textContent = "SOS Sent";
     };
@@ -294,7 +391,7 @@ const renderQrEmergencyPage = async (req, res) => {
       const fallback = () => {
         setStatus("Location unavailable. Sending SOS without live GPS...", "warn");
         sendSos(null).catch((error) => {
-          setStatus(error.message || "Unable to send SOS.", "warn");
+          setStatus(error.message || "Unable to send SOS. Check SMS provider setup and contact phone numbers.", "warn");
           button.disabled = false;
         });
       };
@@ -311,7 +408,7 @@ const renderQrEmergencyPage = async (req, res) => {
             latitude: position.coords.latitude,
             longitude: position.coords.longitude
           }).catch((error) => {
-            setStatus(error.message || "Unable to send SOS.", "warn");
+            setStatus(error.message || "Unable to send SOS. Check SMS provider setup and contact phone numbers.", "warn");
             button.disabled = false;
           });
         },
